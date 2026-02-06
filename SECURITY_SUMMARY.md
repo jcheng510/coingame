@@ -141,6 +141,16 @@ async function verifyMetaToken(token, userId) {
 
 ## Vulnerability Assessment
 
+### Dependency Vulnerabilities - FIXED ✅
+
+**Update (Feb 6, 2026):** All dependency vulnerabilities have been patched.
+
+See [SECURITY_ADVISORY.md](SECURITY_ADVISORY.md) for details on:
+- @trpc/server prototype pollution (updated to 11.8.0)
+- pnpm multiple vulnerabilities (updated to 10.27.0)
+
+**Note:** These vulnerabilities were in the bundled AI ERP system, NOT in the CoinQuest AR game backend.
+
 ### No Critical Vulnerabilities Found ✅
 
 After manual code review and testing:
