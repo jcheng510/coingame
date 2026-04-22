@@ -1,0 +1,17 @@
+{
+  "name": "coingame",
+  "version": "0.1.0",
+  "description": "A barter marketplace where users trade time, items, and services priced in coins.",
+  "main": "server/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node server/index.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "better-sqlite3": "^11.3.0",
+    "cookie-parser": "^1.4.7",
+    "express": "^4.21.1"
+  }
+}

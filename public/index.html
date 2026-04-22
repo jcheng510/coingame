@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CoinGame — Barter Marketplace</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header id="topbar">
+      <h1><a href="#" data-nav="market">CoinGame</a></h1>
+      <nav id="nav" hidden>
+        <a href="#" data-nav="market">Marketplace</a>
+        <a href="#" data-nav="mine">My Listings</a>
+        <a href="#" data-nav="trades">Trades</a>
+        <a href="#" data-nav="wallet">Wallet</a>
+      </nav>
+      <div id="userbox">
+        <span id="who"></span>
+        <button id="logoutBtn" hidden>Log out</button>
+      </div>
+    </header>
+
+    <main id="app"></main>
+
+    <template id="tpl-auth">
+      <section class="card auth">
+        <div class="tabs">
+          <button class="tab active" data-tab="login">Log in</button>
+          <button class="tab" data-tab="register">Sign up</button>
+        </div>
+        <form id="authForm">
+          <label>Username<input name="username" autocomplete="username" required minlength="3" maxlength="32" /></label>
+          <label>Password<input name="password" type="password" autocomplete="current-password" required minlength="6" /></label>
+          <button type="submit" id="authSubmit">Log in</button>
+          <p class="hint">New users start with <b>100 coins</b>. Claim <b>20 coins</b> every 24 hours from the wallet, or earn more by trading.</p>
+          <p class="err" id="authErr" hidden></p>
+        </form>
+      </section>
+    </template>
+
+    <template id="tpl-market">
+      <section>
+        <div class="row between wrap">
+          <h2>Marketplace</h2>
+          <div class="filters">
+            <input id="q" placeholder="Search…" />
+            <select id="kindFilter">
+              <option value="">All kinds</option>
+              <option value="time">Time</option>
+              <option value="item">Item</option>
+              <option value="service">Service</option>
+            </select>
+          </div>
+        </div>
+        <div id="listings" class="grid"></div>
+      </section>
+    </template>
+
+    <template id="tpl-mine">
+      <section>
+        <div class="row between wrap">
+          <h2>My Listings</h2>
+          <button id="newListingBtn">+ New listing</button>
+        </div>
+        <div id="myListings" class="grid"></div>
+      </section>
+    </template>
+
+    <template id="tpl-trades">
+      <section>
+        <h2>Trades</h2>
+        <div class="tabs">
+          <button class="tab active" data-trole="owner">Incoming</button>
+          <button class="tab" data-trole="proposer">Outgoing</button>
+        </div>
+        <div id="tradeList" class="stack"></div>
+      </section>
+    </template>
+
+    <template id="tpl-wallet">
+      <section>
+        <h2>Wallet</h2>
+        <div class="card walletcard">
+          <div class="balance"><span id="balance">0</span> coins</div>
+          <button id="dailyBtn">Claim daily 20 coins</button>
+          <p class="err" id="dailyErr" hidden></p>
+        </div>
+        <h3>Recent activity</h3>
+        <table id="txTable">
+          <thead><tr><th>When</th><th>Change</th><th>Balance</th><th>Reason</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </section>
+    </template>
+
+    <div id="modal" hidden>
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-panel" role="dialog" aria-modal="true">
+        <button class="modal-close" data-close aria-label="Close">&times;</button>
+        <div id="modalBody"></div>
+      </div>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
