@@ -21,6 +21,8 @@
       </div>
     </header>
 
+    <div id="banner" hidden></div>
+
     <main id="app"></main>
 
     <template id="tpl-auth">
@@ -31,9 +33,10 @@
         </div>
         <form id="authForm">
           <label>Username<input name="username" autocomplete="username" required minlength="3" maxlength="32" /></label>
+          <label id="emailField" hidden>Email<input name="email" type="email" autocomplete="email" /></label>
           <label>Password<input name="password" type="password" autocomplete="current-password" required minlength="6" /></label>
           <button type="submit" id="authSubmit">Log in</button>
-          <p class="hint">New users start with <b>100 coins</b>. Claim <b>20 coins</b> every 24 hours from the wallet, or earn more by trading.</p>
+          <p class="hint">New users get <b>100 coins</b> on signup, plus <b>20 coins</b> every 24 hours, or earn more by trading.</p>
           <p class="err" id="authErr" hidden></p>
         </form>
       </section>

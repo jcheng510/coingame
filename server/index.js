@@ -8,20 +8,38 @@ const {
   createSession,
   destroySession,
   requireAuth,
+  requireVerified,
   hashPassword,
   verifyPassword,
+  csrfMiddleware,
+  newToken,
 } = require('./auth');
+const { rateLimit, clientIp } = require('./rateLimit');
 
 const app = express();
+app.set('trust proxy', true);
 app.use(express.json({ limit: '100kb' }));
 app.use(cookieParser());
+app.use(csrfMiddleware);
 
 const PORT = process.env.PORT || 3000;
 const STARTING_COINS = 100;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function send(res, status, body) {
   return res.status(status).json(body);
 }
+
+const ipKey = (req) => clientIp(req);
+const userKey = (req) => (req.user ? `u${req.user.id}` : clientIp(req));
+
+const registerLimiter = rateLimit({ name: 'register', windowMs: 60 * 60 * 1000, max: 5, keyFn: ipKey });
+const loginLimiter = rateLimit({ name: 'login', windowMs: 15 * 60 * 1000, max: 10, keyFn: ipKey });
+const writeLimiter = rateLimit({ name: 'write', windowMs: 60 * 60 * 1000, max: 60, keyFn: userKey });
+const dailyLimiter = rateLimit({ name: 'daily', windowMs: 60 * 60 * 1000, max: 5, keyFn: userKey });
+const generalLimiter = rateLimit({ name: 'general', windowMs: 60 * 1000, max: 300, keyFn: ipKey });
+
+app.use('/api', generalLimiter);
 
 function recordTransaction(userId, delta, reason, tradeId = null) {
   const row = db.prepare('SELECT coins FROM users WHERE id = ?').get(userId);
@@ -36,31 +54,55 @@ function recordTransaction(userId, delta, reason, tradeId = null) {
 
 // --- Auth ---
 
-app.post('/api/register', (req, res) => {
-  const { username, password } = req.body || {};
-  if (!username || !password) return send(res, 400, { error: 'username and password required' });
+app.get('/api/csrf', (req, res) => {
+  // Safe endpoint clients can hit to ensure a CSRF cookie is set.
+  send(res, 200, { token: req.csrfToken });
+});
+
+app.post('/api/register', registerLimiter, (req, res) => {
+  const { username, email, password } = req.body || {};
+  if (!username || !email || !password)
+    return send(res, 400, { error: 'username, email and password are required' });
   if (username.length < 3 || username.length > 32)
     return send(res, 400, { error: 'username must be 3-32 chars' });
+  if (!EMAIL_RE.test(email)) return send(res, 400, { error: 'invalid email' });
   if (password.length < 6) return send(res, 400, { error: 'password must be at least 6 chars' });
 
-  const existing = db.prepare('SELECT id FROM users WHERE username = ?').get(username);
-  if (existing) return send(res, 409, { error: 'username taken' });
+  if (db.prepare('SELECT id FROM users WHERE username = ?').get(username))
+    return send(res, 409, { error: 'username taken' });
+  if (db.prepare('SELECT id FROM users WHERE email = ?').get(email))
+    return send(res, 409, { error: 'email already registered' });
 
+  const token = newToken(16);
   const info = db
-    .prepare('INSERT INTO users (username, password, coins) VALUES (?, ?, ?)')
-    .run(username, hashPassword(password), STARTING_COINS);
+    .prepare(
+      `INSERT INTO users (username, email, password, coins, verify_token)
+       VALUES (?, ?, ?, ?, ?)`
+    )
+    .run(username, email, hashPassword(password), STARTING_COINS, token);
 
   db.prepare(
     `INSERT INTO transactions (user_id, delta, balance_after, reason)
      VALUES (?, ?, ?, 'signup_bonus')`
   ).run(info.lastInsertRowid, STARTING_COINS, STARTING_COINS);
 
-  const token = createSession(info.lastInsertRowid);
-  res.cookie(SESSION_COOKIE, token, { httpOnly: true, sameSite: 'lax' });
-  send(res, 201, { id: info.lastInsertRowid, username, coins: STARTING_COINS });
+  const sessToken = createSession(info.lastInsertRowid);
+  res.cookie(SESSION_COOKIE, sessToken, { httpOnly: true, sameSite: 'lax' });
+
+  // No SMTP in this demo — log + return the verify link so devs can click it.
+  const verifyUrl = `/api/verify?token=${token}`;
+  console.log(`[verify] ${email} -> ${verifyUrl}`);
+  send(res, 201, {
+    id: info.lastInsertRowid,
+    username,
+    email,
+    coins: STARTING_COINS,
+    verified: 0,
+    verify_url: verifyUrl,
+  });
 });
 
-app.post('/api/login', (req, res) => {
+app.post('/api/login', loginLimiter, (req, res) => {
   const { username, password } = req.body || {};
   if (!username || !password) return send(res, 400, { error: 'username and password required' });
   const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
@@ -69,7 +111,13 @@ app.post('/api/login', (req, res) => {
 
   const token = createSession(user.id);
   res.cookie(SESSION_COOKIE, token, { httpOnly: true, sameSite: 'lax' });
-  send(res, 200, { id: user.id, username: user.username, coins: user.coins });
+  send(res, 200, {
+    id: user.id,
+    username: user.username,
+    email: user.email,
+    coins: user.coins,
+    verified: user.verified,
+  });
 });
 
 app.post('/api/logout', (req, res) => {
@@ -80,6 +128,25 @@ app.post('/api/logout', (req, res) => {
 
 app.get('/api/me', requireAuth, (req, res) => {
   send(res, 200, req.user);
+});
+
+app.get('/api/verify', (req, res) => {
+  const token = String(req.query.token || '');
+  if (!token) return send(res, 400, { error: 'token required' });
+  const user = db.prepare('SELECT id FROM users WHERE verify_token = ?').get(token);
+  if (!user) return send(res, 404, { error: 'invalid or used token' });
+  db.prepare('UPDATE users SET verified = 1, verify_token = NULL WHERE id = ?').run(user.id);
+  // Redirect to the app so the user sees the success message.
+  res.redirect('/?verified=1');
+});
+
+app.post('/api/resend-verification', requireAuth, writeLimiter, (req, res) => {
+  if (req.user.verified) return send(res, 400, { error: 'already verified' });
+  const token = newToken(16);
+  db.prepare('UPDATE users SET verify_token = ? WHERE id = ?').run(token, req.user.id);
+  const verifyUrl = `/api/verify?token=${token}`;
+  console.log(`[verify resend] ${req.user.email} -> ${verifyUrl}`);
+  send(res, 200, { verify_url: verifyUrl });
 });
 
 // --- Listings ---
@@ -122,35 +189,81 @@ app.get('/api/listings', (req, res) => {
   send(res, 200, rows);
 });
 
-app.post('/api/listings', requireAuth, (req, res) => {
-  const { kind, title, description, unit, quantity, value_coins } = req.body || {};
+function validateListingInput(body) {
+  const { kind, title, description, unit, quantity, value_coins } = body || {};
   if (!['time', 'item', 'service'].includes(kind))
-    return send(res, 400, { error: 'kind must be time, item, or service' });
-  if (!title || title.length > 120) return send(res, 400, { error: 'title required (<=120 chars)' });
+    return { error: 'kind must be time, item, or service' };
+  if (!title || title.length > 120) return { error: 'title required (<=120 chars)' };
   const v = Number(value_coins);
-  if (!Number.isInteger(v) || v < 0) return send(res, 400, { error: 'value_coins must be a non-negative integer' });
-  const qty = Number.isInteger(Number(quantity)) && Number(quantity) > 0 ? Number(quantity) : 1;
-  const u = unit && String(unit).slice(0, 20);
+  if (!Number.isInteger(v) || v < 0) return { error: 'value_coins must be a non-negative integer' };
+  const qty = Number(quantity);
+  if (!Number.isInteger(qty) || qty < 1) return { error: 'quantity must be >= 1' };
+  return {
+    ok: {
+      kind,
+      title: String(title).trim(),
+      description: String(description || '').trim().slice(0, 2000),
+      unit: (unit && String(unit).slice(0, 20)) || (kind === 'time' ? 'hour' : 'piece'),
+      quantity: qty,
+      value_coins: v,
+    },
+  };
+}
 
+app.post('/api/listings', requireAuth, requireVerified, writeLimiter, (req, res) => {
+  const v = validateListingInput(req.body);
+  if (v.error) return send(res, 400, { error: v.error });
+  const { kind, title, description, unit, quantity, value_coins } = v.ok;
   const info = db
     .prepare(
-      `INSERT INTO listings (user_id, kind, title, description, unit, quantity, value_coins)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO listings
+       (user_id, kind, title, description, unit, quantity, quantity_available, value_coins)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     )
-    .run(
-      req.user.id,
-      kind,
-      title.trim(),
-      (description || '').trim(),
-      u || (kind === 'time' ? 'hour' : 'piece'),
-      qty,
-      v
-    );
-  const row = db.prepare('SELECT * FROM listings WHERE id = ?').get(info.lastInsertRowid);
-  send(res, 201, row);
+    .run(req.user.id, kind, title, description, unit, quantity, quantity, value_coins);
+  send(res, 201, db.prepare('SELECT * FROM listings WHERE id = ?').get(info.lastInsertRowid));
 });
 
-app.delete('/api/listings/:id', requireAuth, (req, res) => {
+app.patch('/api/listings/:id', requireAuth, requireVerified, writeLimiter, (req, res) => {
+  const id = Number(req.params.id);
+  const listing = db.prepare('SELECT * FROM listings WHERE id = ?').get(id);
+  if (!listing) return send(res, 404, { error: 'not found' });
+  if (listing.user_id !== req.user.id) return send(res, 403, { error: 'forbidden' });
+  if (listing.status !== 'active') return send(res, 400, { error: 'only active listings can be edited' });
+
+  const pending = db
+    .prepare("SELECT COUNT(*) AS c FROM trades WHERE (listing_id = ? OR offer_listing_id = ?) AND status = 'pending'")
+    .get(id, id).c;
+  if (pending > 0)
+    return send(res, 400, { error: 'cannot edit a listing with pending trades' });
+
+  const allowed = ['title', 'description', 'unit', 'quantity', 'value_coins'];
+  const updates = {};
+  for (const k of allowed) if (k in (req.body || {})) updates[k] = req.body[k];
+
+  if ('title' in updates && (!updates.title || String(updates.title).length > 120))
+    return send(res, 400, { error: 'title required (<=120 chars)' });
+  if ('value_coins' in updates) {
+    const v = Number(updates.value_coins);
+    if (!Number.isInteger(v) || v < 0) return send(res, 400, { error: 'value_coins invalid' });
+    updates.value_coins = v;
+  }
+  if ('quantity' in updates) {
+    const q = Number(updates.quantity);
+    if (!Number.isInteger(q) || q < 1) return send(res, 400, { error: 'quantity must be >= 1' });
+    updates.quantity = q;
+    updates.quantity_available = q;
+  }
+
+  const keys = Object.keys(updates);
+  if (!keys.length) return send(res, 200, listing);
+  const setSql = keys.map((k) => `${k} = @${k}`).join(', ');
+  db.prepare(`UPDATE listings SET ${setSql}, updated_at = datetime('now') WHERE id = @id`)
+    .run({ ...updates, id });
+  send(res, 200, db.prepare('SELECT * FROM listings WHERE id = ?').get(id));
+});
+
+app.delete('/api/listings/:id', requireAuth, requireVerified, writeLimiter, (req, res) => {
   const id = Number(req.params.id);
   const listing = db.prepare('SELECT * FROM listings WHERE id = ?').get(id);
   if (!listing) return send(res, 404, { error: 'not found' });
@@ -158,40 +271,38 @@ app.delete('/api/listings/:id', requireAuth, (req, res) => {
   if (listing.status !== 'active')
     return send(res, 400, { error: 'only active listings can be cancelled' });
   db.prepare("UPDATE listings SET status = 'cancelled' WHERE id = ?").run(id);
-  // Reject any pending trades for this listing.
-  const pending = db
-    .prepare("SELECT id FROM trades WHERE listing_id = ? AND status = 'pending'")
-    .all(id);
-  for (const t of pending) {
-    db.prepare(
-      "UPDATE trades SET status = 'rejected', resolved_at = datetime('now') WHERE id = ?"
-    ).run(t.id);
+  for (const t of db
+    .prepare("SELECT id FROM trades WHERE (listing_id = ? OR offer_listing_id = ?) AND status = 'pending'")
+    .all(id, id)) {
+    db.prepare("UPDATE trades SET status = 'rejected', resolved_at = datetime('now') WHERE id = ?").run(t.id);
   }
   send(res, 200, { ok: true });
 });
 
 // --- Trades ---
 
-app.post('/api/trades', requireAuth, (req, res) => {
-  const { listing_id, offer_type, offer_coins, offer_listing_id, message } = req.body || {};
+app.post('/api/trades', requireAuth, requireVerified, writeLimiter, (req, res) => {
+  const { listing_id, offer_coins, offer_listing_id, offer_quantity, quantity_requested, message } = req.body || {};
   const listing = db.prepare("SELECT * FROM listings WHERE id = ?").get(Number(listing_id));
   if (!listing) return send(res, 404, { error: 'listing not found' });
   if (listing.status !== 'active') return send(res, 400, { error: 'listing not available' });
   if (listing.user_id === req.user.id) return send(res, 400, { error: 'cannot trade with yourself' });
 
-  if (!['coins', 'listing'].includes(offer_type))
-    return send(res, 400, { error: "offer_type must be 'coins' or 'listing'" });
+  const qReq = Number(quantity_requested || 1);
+  if (!Number.isInteger(qReq) || qReq < 1)
+    return send(res, 400, { error: 'quantity_requested must be a positive integer' });
+  if (qReq > listing.quantity_available)
+    return send(res, 400, { error: `only ${listing.quantity_available} available` });
 
-  let offerCoins = 0;
-  let offerListingId = null;
+  const coins = Number(offer_coins || 0);
+  if (!Number.isInteger(coins) || coins < 0)
+    return send(res, 400, { error: 'offer_coins must be a non-negative integer' });
+  if (coins > req.user.coins)
+    return send(res, 400, { error: 'insufficient coins' });
 
-  if (offer_type === 'coins') {
-    offerCoins = Number(offer_coins);
-    if (!Number.isInteger(offerCoins) || offerCoins <= 0)
-      return send(res, 400, { error: 'offer_coins must be a positive integer' });
-    if (req.user.coins < offerCoins)
-      return send(res, 400, { error: 'insufficient coins' });
-  } else {
+  let offeredId = null;
+  let offerQty = 0;
+  if (offer_listing_id != null && offer_listing_id !== '') {
     const oid = Number(offer_listing_id);
     const offered = db.prepare('SELECT * FROM listings WHERE id = ?').get(oid);
     if (!offered) return send(res, 404, { error: 'offered listing not found' });
@@ -201,26 +312,36 @@ app.post('/api/trades', requireAuth, (req, res) => {
       return send(res, 400, { error: 'offered listing is not active' });
     if (offered.id === listing.id)
       return send(res, 400, { error: 'cannot offer the same listing' });
-    offerListingId = offered.id;
+    const oQty = Number(offer_quantity || 1);
+    if (!Number.isInteger(oQty) || oQty < 1)
+      return send(res, 400, { error: 'offer_quantity must be a positive integer' });
+    if (oQty > offered.quantity_available)
+      return send(res, 400, { error: `you only have ${offered.quantity_available} of that listing available` });
+    offeredId = offered.id;
+    offerQty = oQty;
   }
+
+  if (coins <= 0 && !offeredId)
+    return send(res, 400, { error: 'must offer at least coins or a listing' });
 
   const info = db
     .prepare(
       `INSERT INTO trades
-       (listing_id, proposer_id, owner_id, offer_type, offer_coins, offer_listing_id, message)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
+       (listing_id, proposer_id, owner_id, quantity_requested,
+        offer_coins, offer_listing_id, offer_quantity, message)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       listing.id,
       req.user.id,
       listing.user_id,
-      offer_type,
-      offerCoins,
-      offerListingId,
+      qReq,
+      coins,
+      offeredId,
+      offerQty,
       (message || '').slice(0, 500)
     );
-  const trade = db.prepare('SELECT * FROM trades WHERE id = ?').get(info.lastInsertRowid);
-  send(res, 201, trade);
+  send(res, 201, hydrateTrade(db.prepare('SELECT * FROM trades WHERE id = ?').get(info.lastInsertRowid)));
 });
 
 function hydrateTrade(t) {
@@ -231,31 +352,39 @@ function hydrateTrade(t) {
   if (t.offer_listing_id) {
     offerListing = db.prepare('SELECT * FROM listings WHERE id = ?').get(t.offer_listing_id);
   }
-  return { ...t, listing, proposer, owner, offer_listing: offerListing };
+  const messageCount = db
+    .prepare('SELECT COUNT(*) AS c FROM trade_messages WHERE trade_id = ?')
+    .get(t.id).c;
+  return { ...t, listing, proposer, owner, offer_listing: offerListing, message_count: messageCount };
 }
 
 app.get('/api/trades', requireAuth, (req, res) => {
-  const role = req.query.role === 'owner' ? 'owner' : req.query.role === 'proposer' ? 'proposer' : 'all';
+  const role =
+    req.query.role === 'owner' ? 'owner' : req.query.role === 'proposer' ? 'proposer' : 'all';
   let rows;
   if (role === 'owner') {
-    rows = db
-      .prepare('SELECT * FROM trades WHERE owner_id = ? ORDER BY created_at DESC')
-      .all(req.user.id);
+    rows = db.prepare('SELECT * FROM trades WHERE owner_id = ? ORDER BY created_at DESC').all(req.user.id);
   } else if (role === 'proposer') {
-    rows = db
-      .prepare('SELECT * FROM trades WHERE proposer_id = ? ORDER BY created_at DESC')
-      .all(req.user.id);
+    rows = db.prepare('SELECT * FROM trades WHERE proposer_id = ? ORDER BY created_at DESC').all(req.user.id);
   } else {
     rows = db
-      .prepare(
-        'SELECT * FROM trades WHERE owner_id = ? OR proposer_id = ? ORDER BY created_at DESC'
-      )
+      .prepare('SELECT * FROM trades WHERE owner_id = ? OR proposer_id = ? ORDER BY created_at DESC')
       .all(req.user.id, req.user.id);
   }
   send(res, 200, rows.map(hydrateTrade));
 });
 
-app.post('/api/trades/:id/accept', requireAuth, (req, res) => {
+function decrementListing(listingId, qty) {
+  const l = db.prepare('SELECT * FROM listings WHERE id = ?').get(listingId);
+  const left = l.quantity_available - qty;
+  const status = left <= 0 ? 'traded' : 'active';
+  db.prepare(
+    "UPDATE listings SET quantity_available = ?, status = ?, updated_at = datetime('now') WHERE id = ?"
+  ).run(left, status, listingId);
+  return { status, quantity_available: left };
+}
+
+app.post('/api/trades/:id/accept', requireAuth, requireVerified, writeLimiter, (req, res) => {
   const id = Number(req.params.id);
   const run = db.transaction(() => {
     const trade = db.prepare('SELECT * FROM trades WHERE id = ?').get(id);
@@ -266,35 +395,52 @@ app.post('/api/trades/:id/accept', requireAuth, (req, res) => {
     const listing = db.prepare('SELECT * FROM listings WHERE id = ?').get(trade.listing_id);
     if (!listing || listing.status !== 'active')
       throw { status: 400, error: 'listing is no longer available' };
+    if (listing.quantity_available < trade.quantity_requested)
+      throw { status: 400, error: 'listing no longer has enough quantity' };
 
-    if (trade.offer_type === 'coins') {
+    if (trade.offer_coins > 0) {
       const proposer = db.prepare('SELECT coins FROM users WHERE id = ?').get(trade.proposer_id);
       if (proposer.coins < trade.offer_coins)
         throw { status: 400, error: 'proposer no longer has enough coins' };
-      recordTransaction(trade.proposer_id, -trade.offer_coins, 'trade_payment', trade.id);
-      recordTransaction(trade.owner_id, trade.offer_coins, 'trade_earning', trade.id);
-    } else {
-      const offered = db.prepare('SELECT * FROM listings WHERE id = ?').get(trade.offer_listing_id);
-      if (!offered || offered.status !== 'active')
-        throw { status: 400, error: 'offered listing is no longer active' };
-      db.prepare("UPDATE listings SET status = 'traded' WHERE id = ?").run(offered.id);
     }
 
-    db.prepare("UPDATE listings SET status = 'traded' WHERE id = ?").run(listing.id);
+    let offered = null;
+    if (trade.offer_listing_id) {
+      offered = db.prepare('SELECT * FROM listings WHERE id = ?').get(trade.offer_listing_id);
+      if (!offered || offered.status !== 'active')
+        throw { status: 400, error: 'offered listing is no longer active' };
+      if (offered.quantity_available < trade.offer_quantity)
+        throw { status: 400, error: 'offered listing no longer has enough quantity' };
+    }
+
+    if (trade.offer_coins > 0) {
+      recordTransaction(trade.proposer_id, -trade.offer_coins, 'trade_payment', trade.id);
+      recordTransaction(trade.owner_id, trade.offer_coins, 'trade_earning', trade.id);
+    }
+
+    decrementListing(listing.id, trade.quantity_requested);
+    if (offered) decrementListing(offered.id, trade.offer_quantity);
+
     db.prepare(
       "UPDATE trades SET status = 'accepted', resolved_at = datetime('now') WHERE id = ?"
     ).run(trade.id);
 
-    // Auto-reject other pending trades for the main listing and (if swap) for the offered listing.
-    db.prepare(
-      `UPDATE trades SET status = 'rejected', resolved_at = datetime('now')
-       WHERE listing_id = ? AND status = 'pending' AND id != ?`
-    ).run(listing.id, trade.id);
-    if (trade.offer_listing_id) {
+    // Auto-reject other pending trades on listings that are now sold out or swapped.
+    const fresh = db.prepare('SELECT * FROM listings WHERE id = ?').get(listing.id);
+    if (fresh.status !== 'active') {
       db.prepare(
         `UPDATE trades SET status = 'rejected', resolved_at = datetime('now')
          WHERE (listing_id = ? OR offer_listing_id = ?) AND status = 'pending' AND id != ?`
-      ).run(trade.offer_listing_id, trade.offer_listing_id, trade.id);
+      ).run(listing.id, listing.id, trade.id);
+    }
+    if (offered) {
+      const freshOff = db.prepare('SELECT * FROM listings WHERE id = ?').get(offered.id);
+      if (freshOff.status !== 'active') {
+        db.prepare(
+          `UPDATE trades SET status = 'rejected', resolved_at = datetime('now')
+           WHERE (listing_id = ? OR offer_listing_id = ?) AND status = 'pending' AND id != ?`
+        ).run(offered.id, offered.id, trade.id);
+      }
     }
   });
 
@@ -304,34 +450,68 @@ app.post('/api/trades/:id/accept', requireAuth, (req, res) => {
     if (e && e.status) return send(res, e.status, { error: e.error });
     throw e;
   }
-  const trade = db.prepare('SELECT * FROM trades WHERE id = ?').get(id);
-  send(res, 200, hydrateTrade(trade));
+  send(res, 200, hydrateTrade(db.prepare('SELECT * FROM trades WHERE id = ?').get(id)));
 });
 
-app.post('/api/trades/:id/reject', requireAuth, (req, res) => {
+app.post('/api/trades/:id/reject', requireAuth, requireVerified, writeLimiter, (req, res) => {
   const id = Number(req.params.id);
   const trade = db.prepare('SELECT * FROM trades WHERE id = ?').get(id);
   if (!trade) return send(res, 404, { error: 'trade not found' });
   if (trade.owner_id !== req.user.id)
     return send(res, 403, { error: 'only the listing owner can reject' });
   if (trade.status !== 'pending') return send(res, 400, { error: 'trade is not pending' });
-  db.prepare(
-    "UPDATE trades SET status = 'rejected', resolved_at = datetime('now') WHERE id = ?"
-  ).run(id);
+  db.prepare("UPDATE trades SET status = 'rejected', resolved_at = datetime('now') WHERE id = ?").run(id);
   send(res, 200, { ok: true });
 });
 
-app.post('/api/trades/:id/cancel', requireAuth, (req, res) => {
+app.post('/api/trades/:id/cancel', requireAuth, requireVerified, writeLimiter, (req, res) => {
   const id = Number(req.params.id);
   const trade = db.prepare('SELECT * FROM trades WHERE id = ?').get(id);
   if (!trade) return send(res, 404, { error: 'trade not found' });
   if (trade.proposer_id !== req.user.id)
     return send(res, 403, { error: 'only the proposer can cancel' });
   if (trade.status !== 'pending') return send(res, 400, { error: 'trade is not pending' });
-  db.prepare(
-    "UPDATE trades SET status = 'cancelled', resolved_at = datetime('now') WHERE id = ?"
-  ).run(id);
+  db.prepare("UPDATE trades SET status = 'cancelled', resolved_at = datetime('now') WHERE id = ?").run(id);
   send(res, 200, { ok: true });
+});
+
+// --- Trade messages ---
+
+function requireTradeParticipant(req, res, next) {
+  const id = Number(req.params.id);
+  const trade = db.prepare('SELECT * FROM trades WHERE id = ?').get(id);
+  if (!trade) return send(res, 404, { error: 'trade not found' });
+  if (trade.owner_id !== req.user.id && trade.proposer_id !== req.user.id)
+    return send(res, 403, { error: 'forbidden' });
+  req.trade = trade;
+  next();
+}
+
+app.get('/api/trades/:id/messages', requireAuth, requireTradeParticipant, (req, res) => {
+  const rows = db
+    .prepare(
+      `SELECT m.id, m.trade_id, m.user_id, m.body, m.created_at, u.username
+       FROM trade_messages m JOIN users u ON u.id = m.user_id
+       WHERE m.trade_id = ? ORDER BY m.created_at ASC LIMIT 500`
+    )
+    .all(req.trade.id);
+  send(res, 200, rows);
+});
+
+app.post('/api/trades/:id/messages', requireAuth, requireVerified, writeLimiter, requireTradeParticipant, (req, res) => {
+  const body = String((req.body && req.body.body) || '').trim();
+  if (!body) return send(res, 400, { error: 'body required' });
+  if (body.length > 2000) return send(res, 400, { error: 'message too long' });
+  const info = db
+    .prepare('INSERT INTO trade_messages (trade_id, user_id, body) VALUES (?, ?, ?)')
+    .run(req.trade.id, req.user.id, body);
+  const row = db
+    .prepare(
+      `SELECT m.id, m.trade_id, m.user_id, m.body, m.created_at, u.username
+       FROM trade_messages m JOIN users u ON u.id = m.user_id WHERE m.id = ?`
+    )
+    .get(info.lastInsertRowid);
+  send(res, 201, row);
 });
 
 // --- Wallet ---
@@ -347,9 +527,7 @@ app.get('/api/wallet', requireAuth, (req, res) => {
   send(res, 200, { balance, transactions });
 });
 
-// --- Earning coins ---
-// A lightweight "daily claim" so users can earn coins even without trading.
-app.post('/api/wallet/daily', requireAuth, (req, res) => {
+app.post('/api/wallet/daily', requireAuth, requireVerified, dailyLimiter, (req, res) => {
   const last = db
     .prepare(
       `SELECT created_at FROM transactions
@@ -358,7 +536,8 @@ app.post('/api/wallet/daily', requireAuth, (req, res) => {
     )
     .get(req.user.id);
   if (last) {
-    const hoursSince = (Date.now() - new Date(last.created_at.replace(' ', 'T') + 'Z').getTime()) / 36e5;
+    const hoursSince =
+      (Date.now() - new Date(last.created_at.replace(' ', 'T') + 'Z').getTime()) / 36e5;
     if (hoursSince < 24)
       return send(res, 400, {
         error: 'Daily claim already used',

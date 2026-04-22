@@ -32,6 +32,14 @@ h1, h2, h3 { margin: 0 0 12px; }
 #userbox { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 14px; }
 #userbox b { color: var(--accent); }
 
+#banner {
+  padding: 10px 20px; font-size: 13px;
+  background: #3a2a08; color: #ffd580; border-bottom: 1px solid var(--border);
+  display: flex; justify-content: space-between; gap: 12px; align-items: center; flex-wrap: wrap;
+}
+#banner.ok { background: #0f2d1c; color: var(--green); }
+#banner button { padding: 6px 10px; font-size: 12px; }
+
 main { max-width: 1100px; margin: 0 auto; padding: 24px 20px 80px; }
 
 .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 20px; }
@@ -80,7 +88,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .listing .desc { color: var(--muted); font-size: 13px; white-space: pre-wrap; }
 .listing .meta { color: var(--muted); font-size: 12px; }
 .listing .price { color: var(--accent); font-weight: 700; font-size: 18px; }
-.listing .foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: auto; }
+.listing .foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: auto; flex-wrap: wrap; }
 .listing.inactive { opacity: 0.55; }
 
 .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; }
@@ -95,6 +103,13 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .trade .title { display: flex; justify-content: space-between; gap: 10px; align-items: center; flex-wrap: wrap; }
 .trade .offer { color: var(--muted); font-size: 13px; margin-top: 8px; }
 .trade .actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+
+.msgs { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+.msgs .msg { font-size: 13px; padding: 6px 0; }
+.msgs .msg b { color: var(--accent); }
+.msgs .msg .when { color: var(--muted); font-size: 11px; margin-left: 6px; }
+.msg-compose { display: flex; gap: 8px; margin-top: 8px; }
+.msg-compose input { flex: 1; padding: 8px; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; }
 
 .walletcard { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
 .balance { font-size: 32px; font-weight: 700; color: var(--accent); }
