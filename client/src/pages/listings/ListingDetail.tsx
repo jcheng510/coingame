@@ -1,11 +1,24 @@
 import { useState } from "react";
 import { useParams, useLocation } from "wouter";
-import { ArrowLeft, MapPin, Package, Star } from "lucide-react";
+import { ArrowLeft, CheckCircle2, MapPin, Package, Star, Trash2 } from "lucide-react";
+import { toast } from "sonner";
 
 import { trpc } from "@/lib/trpc";
+import { useAuth } from "@/_core/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
 
 const CONDITION_LABEL: Record<string, string> = {
@@ -30,11 +43,33 @@ export default function ListingDetail() {
   const [, setLocation] = useLocation();
   const listingId = Number(id);
   const [selectedPhoto, setSelectedPhoto] = useState(0);
+  const { user } = useAuth();
+  const utils = trpc.useUtils();
 
   const { data: listing, isLoading } = trpc.listings.get.useQuery(
     { id: listingId },
     { enabled: !isNaN(listingId) },
   );
+
+  const markSold = trpc.listings.updateStatus.useMutation({
+    onSuccess: () => {
+      toast.success("Listing marked as sold");
+      utils.listings.get.invalidate({ id: listingId });
+      utils.listings.mine.invalidate();
+      utils.listings.list.invalidate();
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const removeListing = trpc.listings.delete.useMutation({
+    onSuccess: () => {
+      toast.success("Listing removed");
+      utils.listings.mine.invalidate();
+      utils.listings.list.invalidate();
+      setLocation("/listings/mine");
+    },
+    onError: (err) => toast.error(err.message),
+  });
 
   if (isLoading) {
     return (
@@ -57,6 +92,8 @@ export default function ListingDetail() {
   }
 
   const cover = listing.photos[selectedPhoto] ?? listing.photos[0];
+  const isOwner = user?.id === listing.sellerId;
+  const isSold = listing.status === "sold";
 
   return (
     <div className="max-w-5xl mx-auto space-y-6 animate-fade-in">
@@ -68,6 +105,12 @@ export default function ListingDetail() {
         <ArrowLeft className="h-4 w-4" />
         Back to marketplace
       </button>
+
+      {isSold && (
+        <div className="rounded-md border border-green-600/30 bg-green-600/10 text-green-700 dark:text-green-400 px-4 py-2 text-sm font-medium">
+          This listing is sold.
+        </div>
+      )}
 
       <div className="grid md:grid-cols-2 gap-6">
         <div className="space-y-3">
@@ -145,9 +188,52 @@ export default function ListingDetail() {
             </Card>
           )}
 
-          <Button className="w-full" size="lg">
-            Message Seller
-          </Button>
+          {isOwner ? (
+            <div className="flex flex-col gap-2">
+              {!isSold && (
+                <Button
+                  variant="default"
+                  size="lg"
+                  disabled={markSold.isPending}
+                  onClick={() =>
+                    markSold.mutate({ id: listing.id, status: "sold" })
+                  }
+                >
+                  <CheckCircle2 className="h-4 w-4 mr-2" />
+                  Mark as Sold
+                </Button>
+              )}
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button variant="outline" size="lg">
+                    <Trash2 className="h-4 w-4 mr-2" />
+                    Remove Listing
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Remove this listing?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      This will permanently remove the listing and its photos.
+                      This action cannot be undone.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction
+                      onClick={() => removeListing.mutate({ id: listing.id })}
+                    >
+                      Remove
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            </div>
+          ) : (
+            <Button className="w-full" size="lg" disabled={isSold}>
+              {isSold ? "Sold" : "Message Seller"}
+            </Button>
+          )}
         </div>
       </div>
     </div>

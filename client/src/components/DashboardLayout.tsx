@@ -66,6 +66,8 @@ import {
   Target,
   MessageSquare,
   Heart,
+  Tag,
+  Store,
 } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
@@ -134,6 +136,13 @@ const menuGroups = [
     items: [
       { icon: FolderKanban, label: "Projects", path: "/projects" },
       { icon: FolderLock, label: "Data Rooms", path: "/datarooms" },
+    ],
+  },
+  {
+    label: "Marketplace",
+    items: [
+      { icon: Store, label: "Browse", path: "/listings" },
+      { icon: Tag, label: "My Listings", path: "/listings/mine" },
     ],
   },
   {
