@@ -12263,6 +12263,124 @@ Ask if they received the original request and if they can provide a quote.`;
         return { success: true };
       }),
 
+    update: protectedProcedure
+      .input(z.object({
+        id: z.number(),
+        title: z.string().min(3).max(120).optional(),
+        price: z.number().nonnegative().max(1_000_000).optional(),
+        isFirmOnPrice: z.boolean().optional(),
+        category: z.string().min(1).max(64).optional(),
+        subcategory: z.string().max(64).nullable().optional(),
+        condition: z.enum(["new", "like_new", "good", "fair", "poor"]).optional(),
+        description: z.string().max(4000).nullable().optional(),
+        locationLabel: z.string().max(255).nullable().optional(),
+        locationLat: z.number().min(-90).max(90).nullable().optional(),
+        locationLng: z.number().min(-180).max(180).nullable().optional(),
+        // When provided, replaces the full photo set.
+        // `existingPhotoIds` lists photos to keep (in the new order);
+        // `newPhotos` are appended after them.
+        existingPhotoIds: z.array(z.number()).optional(),
+        newPhotos: z.array(z.object({
+          fileData: z.string(),
+          mimeType: z.string(),
+          fileName: z.string().optional(),
+        })).optional(),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        const existing = await db.getListingById(input.id);
+        if (!existing) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Listing not found" });
+        }
+        if (existing.sellerId !== ctx.user.id && ctx.user.role !== "admin") {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Not your listing" });
+        }
+
+        const patch: Record<string, unknown> = {};
+        if (input.title !== undefined) patch.title = input.title;
+        if (input.price !== undefined) patch.price = input.price.toFixed(2);
+        if (input.isFirmOnPrice !== undefined) patch.isFirmOnPrice = input.isFirmOnPrice;
+        if (input.category !== undefined) patch.category = input.category;
+        if (input.subcategory !== undefined) patch.subcategory = input.subcategory;
+        if (input.condition !== undefined) patch.condition = input.condition;
+        if (input.description !== undefined) patch.description = input.description;
+        if (input.locationLabel !== undefined) patch.locationLabel = input.locationLabel;
+        if (input.locationLat !== undefined) {
+          patch.locationLat = input.locationLat === null ? null : input.locationLat.toString();
+        }
+        if (input.locationLng !== undefined) {
+          patch.locationLng = input.locationLng === null ? null : input.locationLng.toString();
+        }
+
+        if (Object.keys(patch).length > 0) {
+          await db.updateListing(input.id, patch);
+        }
+
+        // Photo updates: only when the client supplied either field.
+        const photoUpdateRequested =
+          input.existingPhotoIds !== undefined || input.newPhotos !== undefined;
+
+        if (photoUpdateRequested) {
+          const allowed = new Set([
+            "image/jpeg", "image/png", "image/webp", "image/gif", "image/heic",
+          ]);
+          const newPhotos = input.newPhotos ?? [];
+          for (const p of newPhotos) {
+            if (!allowed.has(p.mimeType)) {
+              throw new TRPCError({
+                code: "BAD_REQUEST",
+                message: `Unsupported image type: ${p.mimeType}`,
+              });
+            }
+          }
+
+          const keepIds = new Set(input.existingPhotoIds ?? []);
+          if (keepIds.size + newPhotos.length < 1) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "A listing needs at least one photo",
+            });
+          }
+          if (keepIds.size + newPhotos.length > 12) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "Up to 12 photos per listing",
+            });
+          }
+
+          // Drop and re-insert to get clean position ordering.
+          await db.deleteListingPhotos(input.id);
+
+          const keptInOrder = (input.existingPhotoIds ?? [])
+            .map((pid) => existing.photos.find((p) => p.id === pid))
+            .filter((p): p is NonNullable<typeof p> => Boolean(p));
+
+          let position = 0;
+          for (const kept of keptInOrder) {
+            await db.addListingPhoto({
+              listingId: input.id,
+              fileUrl: kept.fileUrl,
+              fileKey: kept.fileKey,
+              position: position++,
+            });
+          }
+          for (const photo of newPhotos) {
+            const buffer = Buffer.from(photo.fileData, "base64");
+            const ext = photo.mimeType.split("/")[1] ?? "bin";
+            const key = `listings/${ctx.user.id}/${input.id}/${nanoid()}.${ext}`;
+            const { url } = await storagePut(key, buffer, photo.mimeType);
+            await db.addListingPhoto({
+              listingId: input.id,
+              fileUrl: url,
+              fileKey: key,
+              position: position++,
+            });
+          }
+        }
+
+        await createAuditLog(ctx.user.id, 'update', 'listing', input.id);
+        return { success: true };
+      }),
+
     delete: protectedProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ input, ctx }) => {

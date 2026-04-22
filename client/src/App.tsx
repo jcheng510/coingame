@@ -213,6 +213,7 @@ function Router() {
         {/* Marketplace Listings */}
         <Route path="/listings/new" component={UploadListing} />
         <Route path="/listings/mine" component={MyListings} />
+        <Route path="/listings/:id/edit" component={UploadListing} />
         <Route path="/listings/:id" component={ListingDetail} />
         <Route path="/listings" component={Listings} />
 

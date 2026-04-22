@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { useLocation } from "wouter";
+import { useEffect, useState } from "react";
+import { useLocation, useParams } from "wouter";
 import { useDropzone } from "react-dropzone";
 import { toast } from "sonner";
 import {
@@ -17,36 +17,18 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import {
+  LISTING_CATEGORIES,
+  LISTING_CONDITIONS,
+  type ListingCondition,
+} from "./constants";
 
 const MAX_PHOTOS = 12;
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB per image
 
-const CATEGORIES: { value: string; label: string; subcategories: string[] }[] = [
-  { value: "electronics", label: "Electronics", subcategories: ["Phones", "Laptops", "TVs & Monitors", "Audio", "Cameras", "Gaming"] },
-  { value: "furniture", label: "Furniture", subcategories: ["Sofas", "Tables", "Chairs", "Beds", "Storage", "Outdoor"] },
-  { value: "clothing", label: "Clothing & Shoes", subcategories: ["Men", "Women", "Kids", "Shoes", "Accessories"] },
-  { value: "home", label: "Home & Garden", subcategories: ["Kitchen", "Decor", "Appliances", "Tools", "Garden"] },
-  { value: "vehicles", label: "Cars & Vehicles", subcategories: ["Cars", "Motorcycles", "Bicycles", "Parts"] },
-  { value: "sports", label: "Sports & Outdoors", subcategories: ["Fitness", "Camping", "Bikes", "Team Sports"] },
-  { value: "toys", label: "Toys & Games", subcategories: ["Board Games", "Video Games", "Kids Toys", "Collectibles"] },
-  { value: "baby", label: "Baby & Kids", subcategories: ["Strollers", "Car Seats", "Clothing", "Toys"] },
-  { value: "coins", label: "Coins & Collectibles", subcategories: ["US Coins", "World Coins", "Bullion", "Paper Money"] },
-  { value: "other", label: "Other", subcategories: [] },
-];
-
-const CONDITIONS: { value: "new" | "like_new" | "good" | "fair" | "poor"; label: string; helper: string }[] = [
-  { value: "new", label: "New", helper: "Never used, in original packaging" },
-  { value: "like_new", label: "Like New", helper: "Used once or twice, no signs of wear" },
-  { value: "good", label: "Good", helper: "Lightly used, works perfectly" },
-  { value: "fair", label: "Fair", helper: "Visible wear, still functional" },
-  { value: "poor", label: "For Parts / Not Working", helper: "Broken or needs repair" },
-];
-
-type PendingPhoto = {
-  id: string;
-  file: File;
-  previewUrl: string;
-};
+type PhotoSlot =
+  | { kind: "existing"; id: string; listingPhotoId: number; previewUrl: string }
+  | { kind: "new"; id: string; file: File; previewUrl: string };
 
 function readFileAsBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -62,19 +44,53 @@ function readFileAsBase64(file: File): Promise<string> {
 }
 
 export default function UploadListing() {
+  const params = useParams<{ id?: string }>();
+  const editId = params.id ? Number(params.id) : undefined;
+  const isEditMode = editId !== undefined && !isNaN(editId);
+
   const [, setLocation] = useLocation();
-  const [photos, setPhotos] = useState<PendingPhoto[]>([]);
+  const [photos, setPhotos] = useState<PhotoSlot[]>([]);
   const [title, setTitle] = useState("");
   const [priceInput, setPriceInput] = useState("");
   const [isFirm, setIsFirm] = useState(false);
   const [category, setCategory] = useState("");
   const [subcategory, setSubcategory] = useState("");
-  const [condition, setCondition] = useState<typeof CONDITIONS[number]["value"] | "">("");
+  const [condition, setCondition] = useState<ListingCondition | "">("");
   const [description, setDescription] = useState("");
   const [locationLabel, setLocationLabel] = useState("");
   const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [hasSeeded, setHasSeeded] = useState(false);
 
-  const activeCategory = CATEGORIES.find(c => c.value === category);
+  const activeCategory = LISTING_CATEGORIES.find((c) => c.value === category);
+
+  const utils = trpc.useUtils();
+
+  const existingQuery = trpc.listings.get.useQuery(
+    { id: editId as number },
+    { enabled: isEditMode },
+  );
+
+  useEffect(() => {
+    if (!isEditMode || hasSeeded || !existingQuery.data) return;
+    const l = existingQuery.data;
+    setTitle(l.title);
+    setPriceInput(parseFloat(l.price).toString());
+    setIsFirm(l.isFirmOnPrice);
+    setCategory(l.category);
+    setSubcategory(l.subcategory ?? "");
+    setCondition(l.condition as ListingCondition);
+    setDescription(l.description ?? "");
+    setLocationLabel(l.locationLabel ?? "");
+    setPhotos(
+      l.photos.map((p) => ({
+        kind: "existing" as const,
+        id: `existing-${p.id}`,
+        listingPhotoId: p.id,
+        previewUrl: p.fileUrl,
+      })),
+    );
+    setHasSeeded(true);
+  }, [isEditMode, hasSeeded, existingQuery.data]);
 
   const createListing = trpc.listings.create.useMutation({
     onSuccess: ({ id }) => {
@@ -86,13 +102,30 @@ export default function UploadListing() {
     },
   });
 
+  const updateListing = trpc.listings.update.useMutation({
+    onSuccess: () => {
+      toast.success("Listing updated");
+      if (editId !== undefined) {
+        utils.listings.get.invalidate({ id: editId });
+      }
+      utils.listings.mine.invalidate();
+      utils.listings.list.invalidate();
+      if (editId !== undefined) setLocation(`/listings/${editId}`);
+    },
+    onError: (err) => {
+      toast.error(err.message || "Failed to update listing");
+    },
+  });
+
+  const isPending = createListing.isPending || updateListing.isPending;
+
   const addFiles = (files: File[]) => {
     const remaining = MAX_PHOTOS - photos.length;
     if (remaining <= 0) {
       toast.error(`You can add up to ${MAX_PHOTOS} photos`);
       return;
     }
-    const accepted: PendingPhoto[] = [];
+    const accepted: PhotoSlot[] = [];
     for (const file of files.slice(0, remaining)) {
       if (!file.type.startsWith("image/")) {
         toast.error(`${file.name}: not an image`);
@@ -103,12 +136,13 @@ export default function UploadListing() {
         continue;
       }
       accepted.push({
+        kind: "new",
         id: `${file.name}-${file.size}-${file.lastModified}-${Math.random().toString(36).slice(2, 7)}`,
         file,
         previewUrl: URL.createObjectURL(file),
       });
     }
-    setPhotos(prev => [...prev, ...accepted]);
+    setPhotos((prev) => [...prev, ...accepted]);
   };
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
@@ -120,16 +154,16 @@ export default function UploadListing() {
   });
 
   const removePhoto = (id: string) => {
-    setPhotos(prev => {
-      const p = prev.find(x => x.id === id);
-      if (p) URL.revokeObjectURL(p.previewUrl);
-      return prev.filter(x => x.id !== id);
+    setPhotos((prev) => {
+      const p = prev.find((x) => x.id === id);
+      if (p && p.kind === "new") URL.revokeObjectURL(p.previewUrl);
+      return prev.filter((x) => x.id !== id);
     });
   };
 
   const movePhoto = (from: number, to: number) => {
     if (from === to) return;
-    setPhotos(prev => {
+    setPhotos((prev) => {
       const next = [...prev];
       const [item] = next.splice(from, 1);
       next.splice(to, 0, item);
@@ -145,43 +179,99 @@ export default function UploadListing() {
     price >= 0 &&
     category !== "" &&
     condition !== "" &&
-    !createListing.isPending;
+    !isPending;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!canSubmit) return;
 
     try {
-      const encoded = await Promise.all(
-        photos.map(async (p) => ({
-          fileData: await readFileAsBase64(p.file),
-          mimeType: p.file.type,
-          fileName: p.file.name,
-        })),
-      );
+      if (isEditMode && editId !== undefined) {
+        const existingPhotoIds = photos
+          .filter((p): p is Extract<PhotoSlot, { kind: "existing" }> => p.kind === "existing")
+          .map((p) => p.listingPhotoId);
+        const newPhotoFiles = photos.filter(
+          (p): p is Extract<PhotoSlot, { kind: "new" }> => p.kind === "new",
+        );
+        const newPhotos = await Promise.all(
+          newPhotoFiles.map(async (p) => ({
+            fileData: await readFileAsBase64(p.file),
+            mimeType: p.file.type,
+            fileName: p.file.name,
+          })),
+        );
 
-      createListing.mutate({
-        title: title.trim(),
-        price,
-        isFirmOnPrice: isFirm,
-        category,
-        subcategory: subcategory || undefined,
-        condition: condition as typeof CONDITIONS[number]["value"],
-        description: description.trim() || undefined,
-        locationLabel: locationLabel.trim() || undefined,
-        photos: encoded,
-      });
+        updateListing.mutate({
+          id: editId,
+          title: title.trim(),
+          price,
+          isFirmOnPrice: isFirm,
+          category,
+          subcategory: subcategory || null,
+          condition: condition as ListingCondition,
+          description: description.trim() || null,
+          locationLabel: locationLabel.trim() || null,
+          existingPhotoIds,
+          newPhotos,
+        });
+      } else {
+        const newPhotoFiles = photos.filter(
+          (p): p is Extract<PhotoSlot, { kind: "new" }> => p.kind === "new",
+        );
+        const encoded = await Promise.all(
+          newPhotoFiles.map(async (p) => ({
+            fileData: await readFileAsBase64(p.file),
+            mimeType: p.file.type,
+            fileName: p.file.name,
+          })),
+        );
+
+        createListing.mutate({
+          title: title.trim(),
+          price,
+          isFirmOnPrice: isFirm,
+          category,
+          subcategory: subcategory || undefined,
+          condition: condition as ListingCondition,
+          description: description.trim() || undefined,
+          locationLabel: locationLabel.trim() || undefined,
+          photos: encoded,
+        });
+      }
     } catch (err) {
       toast.error("Failed to read one of the photos");
     }
   };
 
+  if (isEditMode && existingQuery.isLoading) {
+    return (
+      <div className="max-w-3xl mx-auto py-10 text-center">
+        <Loader2 className="h-6 w-6 animate-spin mx-auto text-muted-foreground" />
+      </div>
+    );
+  }
+
+  if (isEditMode && !existingQuery.isLoading && !existingQuery.data) {
+    return (
+      <div className="max-w-3xl mx-auto py-16 text-center">
+        <p className="font-medium">Listing not found</p>
+        <Button className="mt-4" onClick={() => setLocation("/listings")}>
+          Back to marketplace
+        </Button>
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-3xl mx-auto space-y-6 animate-fade-in pb-16">
       <div>
-        <h1 className="text-3xl font-bold tracking-tight">Post Your Item</h1>
+        <h1 className="text-3xl font-bold tracking-tight">
+          {isEditMode ? "Edit Listing" : "Post Your Item"}
+        </h1>
         <p className="text-muted-foreground mt-1">
-          Add photos and details to list your item for sale.
+          {isEditMode
+            ? "Update photos and details for your listing."
+            : "Add photos and details to list your item for sale."}
         </p>
       </div>
 
@@ -280,7 +370,7 @@ export default function UploadListing() {
           </CardContent>
         </Card>
 
-        {/* Title */}
+        {/* Details */}
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-lg">
@@ -304,7 +394,6 @@ export default function UploadListing() {
               </p>
             </div>
 
-            {/* Price */}
             <div className="space-y-2">
               <Label htmlFor="price" className="flex items-center gap-1">
                 <DollarSign className="h-4 w-4" />
@@ -341,7 +430,6 @@ export default function UploadListing() {
               </div>
             </div>
 
-            {/* Category */}
             <div className="grid sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="category">Category</Label>
@@ -356,7 +444,7 @@ export default function UploadListing() {
                     <SelectValue placeholder="Select category" />
                   </SelectTrigger>
                   <SelectContent>
-                    {CATEGORIES.map((c) => (
+                    {LISTING_CATEGORIES.map((c) => (
                       <SelectItem key={c.value} value={c.value}>
                         {c.label}
                       </SelectItem>
@@ -384,7 +472,6 @@ export default function UploadListing() {
               )}
             </div>
 
-            {/* Condition */}
             <div className="space-y-2">
               <Label htmlFor="condition" className="flex items-center gap-1">
                 <Box className="h-4 w-4" />
@@ -392,13 +479,13 @@ export default function UploadListing() {
               </Label>
               <Select
                 value={condition}
-                onValueChange={(v) => setCondition(v as any)}
+                onValueChange={(v) => setCondition(v as ListingCondition)}
               >
                 <SelectTrigger id="condition">
                   <SelectValue placeholder="Select condition" />
                 </SelectTrigger>
                 <SelectContent>
-                  {CONDITIONS.map((c) => (
+                  {LISTING_CONDITIONS.map((c) => (
                     <SelectItem key={c.value} value={c.value}>
                       <div className="flex flex-col">
                         <span>{c.label}</span>
@@ -412,7 +499,6 @@ export default function UploadListing() {
               </Select>
             </div>
 
-            {/* Description */}
             <div className="space-y-2">
               <Label htmlFor="description">Description</Label>
               <Textarea
@@ -428,7 +514,6 @@ export default function UploadListing() {
               </p>
             </div>
 
-            {/* Location */}
             <div className="space-y-2">
               <Label htmlFor="location" className="flex items-center gap-1">
                 <MapPin className="h-4 w-4" />
@@ -448,21 +533,20 @@ export default function UploadListing() {
           </CardContent>
         </Card>
 
-        {/* Submit */}
         <div className="flex items-center justify-end gap-3 sticky bottom-0 bg-background py-4 border-t">
           <Button
             type="button"
             variant="outline"
-            onClick={() => setLocation("/listings")}
-            disabled={createListing.isPending}
+            onClick={() =>
+              setLocation(isEditMode ? `/listings/${editId}` : "/listings")
+            }
+            disabled={isPending}
           >
             Cancel
           </Button>
           <Button type="submit" disabled={!canSubmit} size="lg">
-            {createListing.isPending && (
-              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-            )}
-            Post Listing
+            {isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+            {isEditMode ? "Save Changes" : "Post Listing"}
           </Button>
         </div>
       </form>

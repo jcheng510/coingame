@@ -8054,3 +8054,15 @@ export async function updateListingStatus(
   if (!db) return;
   await db.update(listings).set({ status }).where(eq(listings.id, id));
 }
+
+export async function updateListing(id: number, data: Partial<InsertListing>) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(listings).set(data).where(eq(listings.id, id));
+}
+
+export async function deleteListingPhotos(listingId: number) {
+  const db = await getDb();
+  if (!db) return;
+  await db.delete(listingPhotos).where(eq(listingPhotos.listingId, listingId));
+}

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useParams, useLocation } from "wouter";
-import { ArrowLeft, CheckCircle2, MapPin, Package, Star, Trash2 } from "lucide-react";
+import { ArrowLeft, CheckCircle2, MapPin, Package, Pencil, Star, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { trpc } from "@/lib/trpc";
@@ -191,17 +191,27 @@ export default function ListingDetail() {
           {isOwner ? (
             <div className="flex flex-col gap-2">
               {!isSold && (
-                <Button
-                  variant="default"
-                  size="lg"
-                  disabled={markSold.isPending}
-                  onClick={() =>
-                    markSold.mutate({ id: listing.id, status: "sold" })
-                  }
-                >
-                  <CheckCircle2 className="h-4 w-4 mr-2" />
-                  Mark as Sold
-                </Button>
+                <>
+                  <Button
+                    variant="default"
+                    size="lg"
+                    onClick={() => setLocation(`/listings/${listing.id}/edit`)}
+                  >
+                    <Pencil className="h-4 w-4 mr-2" />
+                    Edit Listing
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="lg"
+                    disabled={markSold.isPending}
+                    onClick={() =>
+                      markSold.mutate({ id: listing.id, status: "sold" })
+                    }
+                  >
+                    <CheckCircle2 className="h-4 w-4 mr-2" />
+                    Mark as Sold
+                  </Button>
+                </>
               )}
               <AlertDialog>
                 <AlertDialogTrigger asChild>

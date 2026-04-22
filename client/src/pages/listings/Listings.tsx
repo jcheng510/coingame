@@ -8,6 +8,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { LISTING_CATEGORIES } from "./constants";
 
 function formatPrice(price: string | number) {
   const n = typeof price === "string" ? parseFloat(price) : price;
@@ -22,9 +23,11 @@ export default function Listings() {
   const [, setLocation] = useLocation();
   const [search, setSearch] = useState("");
   const [submittedSearch, setSubmittedSearch] = useState("");
+  const [category, setCategory] = useState<string | null>(null);
 
   const { data: listings, isLoading } = trpc.listings.list.useQuery({
     search: submittedSearch || undefined,
+    category: category ?? undefined,
   });
 
   return (
@@ -61,6 +64,36 @@ export default function Listings() {
         />
       </form>
 
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={() => setCategory(null)}
+          className={cn(
+            "px-3 py-1.5 rounded-full text-sm border transition-colors",
+            category === null
+              ? "bg-primary text-primary-foreground border-primary"
+              : "bg-background hover:bg-muted",
+          )}
+        >
+          All
+        </button>
+        {LISTING_CATEGORIES.map((c) => (
+          <button
+            key={c.value}
+            type="button"
+            onClick={() => setCategory(c.value)}
+            className={cn(
+              "px-3 py-1.5 rounded-full text-sm border transition-colors",
+              category === c.value
+                ? "bg-primary text-primary-foreground border-primary"
+                : "bg-background hover:bg-muted",
+            )}
+          >
+            {c.label}
+          </button>
+        ))}
+      </div>
+
       {isLoading ? (
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
           {Array.from({ length: 8 }).map((_, i) => (
@@ -74,17 +107,37 @@ export default function Listings() {
         <Card>
           <CardContent className="py-12 text-center">
             <Package className="h-10 w-10 mx-auto mb-3 text-muted-foreground" />
-            <p className="font-medium">No listings yet</p>
-            <p className="text-sm text-muted-foreground mt-1">
-              Be the first to post an item for sale.
+            <p className="font-medium">
+              {category || submittedSearch
+                ? "No listings match your filters"
+                : "No listings yet"}
             </p>
-            <Button
-              className="mt-4"
-              onClick={() => setLocation("/listings/new")}
-            >
-              <Plus className="h-4 w-4 mr-2" />
-              Post Listing
-            </Button>
+            <p className="text-sm text-muted-foreground mt-1">
+              {category || submittedSearch
+                ? "Try clearing the search or selecting a different category."
+                : "Be the first to post an item for sale."}
+            </p>
+            {category || submittedSearch ? (
+              <Button
+                variant="outline"
+                className="mt-4"
+                onClick={() => {
+                  setCategory(null);
+                  setSearch("");
+                  setSubmittedSearch("");
+                }}
+              >
+                Clear filters
+              </Button>
+            ) : (
+              <Button
+                className="mt-4"
+                onClick={() => setLocation("/listings/new")}
+              >
+                <Plus className="h-4 w-4 mr-2" />
+                Post Listing
+              </Button>
+            )}
           </CardContent>
         </Card>
       ) : (
