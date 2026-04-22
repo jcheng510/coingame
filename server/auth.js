@@ -6,8 +6,23 @@ const SESSION_COOKIE = 'cg_session';
 const CSRF_COOKIE = 'cg_csrf';
 const CSRF_HEADER = 'x-csrf-token';
 
+// Endpoints that should bypass CSRF — they carry their own unguessable token
+// in the body (e.g. the email-verification token), and need to be reachable
+// without a prior browser session.
+const CSRF_EXEMPT = new Set([
+  'POST /api/verify',
+]);
+
 function newToken(bytes = 32) {
   return crypto.randomBytes(bytes).toString('hex');
+}
+
+function cookieOpts(req, extra = {}) {
+  return {
+    sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production' || (req && req.secure === true),
+    ...extra,
+  };
 }
 
 function createSession(userId) {
@@ -47,11 +62,11 @@ function requireVerified(req, res, next) {
 }
 
 function hashPassword(plain) {
-  return bcrypt.hashSync(plain, 10);
+  return bcrypt.hash(plain, 10);
 }
 
 function verifyPassword(plain, hash) {
-  return bcrypt.compareSync(plain, hash);
+  return bcrypt.compare(plain, hash);
 }
 
 // Double-submit CSRF: ensure every client has a token in a readable cookie,
@@ -60,16 +75,17 @@ function csrfMiddleware(req, res, next) {
   let token = req.cookies && req.cookies[CSRF_COOKIE];
   if (!token) {
     token = newToken(24);
-    res.cookie(CSRF_COOKIE, token, { sameSite: 'lax' }); // readable by JS
+    res.cookie(CSRF_COOKIE, token, cookieOpts(req)); // readable by JS (no httpOnly)
   }
   req.csrfToken = token;
 
   const safe = req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS';
-  if (!safe) {
-    const header = req.get(CSRF_HEADER);
-    if (!header || header !== token)
-      return res.status(403).json({ error: 'Invalid CSRF token' });
-  }
+  if (safe) return next();
+  if (CSRF_EXEMPT.has(`${req.method} ${req.path}`)) return next();
+
+  const header = req.get(CSRF_HEADER);
+  if (!header || header !== token)
+    return res.status(403).json({ error: 'Invalid CSRF token' });
   next();
 }
 
@@ -84,5 +100,6 @@ module.exports = {
   hashPassword,
   verifyPassword,
   csrfMiddleware,
+  cookieOpts,
   newToken,
 };

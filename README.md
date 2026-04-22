@@ -21,6 +21,12 @@ npm start
 
 SQLite data is persisted under `data/coingame.db`. Delete that directory to reset.
 
+### Environment
+
+- `PORT` — listen port (default `3000`).
+- `NODE_ENV=production` — sets `Secure` on session and CSRF cookies (use this when serving over HTTPS).
+- `TRUST_PROXY` — forwarded by Express to `app.set('trust proxy', …)`. Defaults to off, so `X-Forwarded-For` is ignored. Set to a hop count (e.g. `1`) or a preset (e.g. `loopback`) when running behind a reverse proxy.
+
 ## Tech
 
 - Node.js + Express, no build step.

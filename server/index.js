@@ -12,13 +12,22 @@ const {
   hashPassword,
   verifyPassword,
   csrfMiddleware,
+  cookieOpts,
   newToken,
 } = require('./auth');
 const { rateLimit, clientIp } = require('./rateLimit');
 
 const app = express();
-app.set('trust proxy', true);
+// Trust proxy is OFF by default so X-Forwarded-For can't be spoofed by
+// arbitrary clients. Set TRUST_PROXY to a hop count (e.g. "1") or a known
+// preset (e.g. "loopback") when running behind a reverse proxy.
+const trustProxy = process.env.TRUST_PROXY;
+if (trustProxy) {
+  const asNum = Number(trustProxy);
+  app.set('trust proxy', Number.isInteger(asNum) ? asNum : trustProxy);
+}
 app.use(express.json({ limit: '100kb' }));
+app.use(express.urlencoded({ extended: false, limit: '10kb' }));
 app.use(cookieParser());
 app.use(csrfMiddleware);
 
@@ -59,65 +68,74 @@ app.get('/api/csrf', (req, res) => {
   send(res, 200, { token: req.csrfToken });
 });
 
-app.post('/api/register', registerLimiter, (req, res) => {
-  const { username, email, password } = req.body || {};
-  if (!username || !email || !password)
-    return send(res, 400, { error: 'username, email and password are required' });
-  if (username.length < 3 || username.length > 32)
-    return send(res, 400, { error: 'username must be 3-32 chars' });
-  if (!EMAIL_RE.test(email)) return send(res, 400, { error: 'invalid email' });
-  if (password.length < 6) return send(res, 400, { error: 'password must be at least 6 chars' });
+app.post('/api/register', registerLimiter, async (req, res, next) => {
+  try {
+    const { username, email, password } = req.body || {};
+    if (!username || !email || !password)
+      return send(res, 400, { error: 'username, email and password are required' });
+    if (username.length < 3 || username.length > 32)
+      return send(res, 400, { error: 'username must be 3-32 chars' });
+    if (!EMAIL_RE.test(email)) return send(res, 400, { error: 'invalid email' });
+    if (password.length < 6) return send(res, 400, { error: 'password must be at least 6 chars' });
 
-  if (db.prepare('SELECT id FROM users WHERE username = ?').get(username))
-    return send(res, 409, { error: 'username taken' });
-  if (db.prepare('SELECT id FROM users WHERE email = ?').get(email))
-    return send(res, 409, { error: 'email already registered' });
+    if (db.prepare('SELECT id FROM users WHERE username = ?').get(username))
+      return send(res, 409, { error: 'username taken' });
+    if (db.prepare('SELECT id FROM users WHERE email = ?').get(email))
+      return send(res, 409, { error: 'email already registered' });
 
-  const token = newToken(16);
-  const info = db
-    .prepare(
-      `INSERT INTO users (username, email, password, coins, verify_token)
-       VALUES (?, ?, ?, ?, ?)`
-    )
-    .run(username, email, hashPassword(password), STARTING_COINS, token);
+    const token = newToken(16);
+    const passwordHash = await hashPassword(password);
+    const info = db
+      .prepare(
+        `INSERT INTO users (username, email, password, coins, verify_token)
+         VALUES (?, ?, ?, ?, ?)`
+      )
+      .run(username, email, passwordHash, STARTING_COINS, token);
 
-  db.prepare(
-    `INSERT INTO transactions (user_id, delta, balance_after, reason)
-     VALUES (?, ?, ?, 'signup_bonus')`
-  ).run(info.lastInsertRowid, STARTING_COINS, STARTING_COINS);
+    db.prepare(
+      `INSERT INTO transactions (user_id, delta, balance_after, reason)
+       VALUES (?, ?, ?, 'signup_bonus')`
+    ).run(info.lastInsertRowid, STARTING_COINS, STARTING_COINS);
 
-  const sessToken = createSession(info.lastInsertRowid);
-  res.cookie(SESSION_COOKIE, sessToken, { httpOnly: true, sameSite: 'lax' });
+    const sessToken = createSession(info.lastInsertRowid);
+    res.cookie(SESSION_COOKIE, sessToken, cookieOpts(req, { httpOnly: true }));
 
-  // No SMTP in this demo — log + return the verify link so devs can click it.
-  const verifyUrl = `/api/verify?token=${token}`;
-  console.log(`[verify] ${email} -> ${verifyUrl}`);
-  send(res, 201, {
-    id: info.lastInsertRowid,
-    username,
-    email,
-    coins: STARTING_COINS,
-    verified: 0,
-    verify_url: verifyUrl,
-  });
+    // No SMTP in this demo — log + return the verify link so devs can click it.
+    const verifyUrl = `/api/verify?token=${token}`;
+    console.log(`[verify] ${email} -> ${verifyUrl}`);
+    send(res, 201, {
+      id: info.lastInsertRowid,
+      username,
+      email,
+      coins: STARTING_COINS,
+      verified: 0,
+      verify_url: verifyUrl,
+    });
+  } catch (e) {
+    next(e);
+  }
 });
 
-app.post('/api/login', loginLimiter, (req, res) => {
-  const { username, password } = req.body || {};
-  if (!username || !password) return send(res, 400, { error: 'username and password required' });
-  const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
-  if (!user || !verifyPassword(password, user.password))
-    return send(res, 401, { error: 'invalid credentials' });
+app.post('/api/login', loginLimiter, async (req, res, next) => {
+  try {
+    const { username, password } = req.body || {};
+    if (!username || !password) return send(res, 400, { error: 'username and password required' });
+    const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
+    if (!user || !(await verifyPassword(password, user.password)))
+      return send(res, 401, { error: 'invalid credentials' });
 
-  const token = createSession(user.id);
-  res.cookie(SESSION_COOKIE, token, { httpOnly: true, sameSite: 'lax' });
-  send(res, 200, {
-    id: user.id,
-    username: user.username,
-    email: user.email,
-    coins: user.coins,
-    verified: user.verified,
-  });
+    const token = createSession(user.id);
+    res.cookie(SESSION_COOKIE, token, cookieOpts(req, { httpOnly: true }));
+    send(res, 200, {
+      id: user.id,
+      username: user.username,
+      email: user.email,
+      coins: user.coins,
+      verified: user.verified,
+    });
+  } catch (e) {
+    next(e);
+  }
 });
 
 app.post('/api/logout', (req, res) => {
@@ -130,8 +148,45 @@ app.get('/api/me', requireAuth, (req, res) => {
   send(res, 200, req.user);
 });
 
+// GET renders a confirmation form so prefetchers/crawlers can't unintentionally
+// verify an account. The actual state change happens in POST below.
 app.get('/api/verify', (req, res) => {
   const token = String(req.query.token || '');
+  if (!token) return send(res, 400, { error: 'token required' });
+  res.set('Cache-Control', 'no-store');
+  res.type('html');
+  res.send(`<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Verify your account</title>
+    <style>
+      body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+             background: #0f1220; color: #e6e8f2; display: flex; align-items: center;
+             justify-content: center; height: 100vh; margin: 0; }
+      main { background: #181c30; border: 1px solid #2a3050; border-radius: 10px;
+             padding: 32px; max-width: 420px; text-align: center; }
+      button { background: #ffcc3d; color: #1a1200; border: 0; border-radius: 6px;
+               padding: 12px 20px; font-weight: 600; font-size: 15px; cursor: pointer; }
+      button:hover { background: #d8a91a; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Verify your account</h1>
+      <p>Click the button below to complete email verification.</p>
+      <form method="post" action="/api/verify">
+        <input type="hidden" name="token" value="${escapeHtml(token)}">
+        <button type="submit">Verify account</button>
+      </form>
+    </main>
+  </body>
+</html>`);
+});
+
+app.post('/api/verify', (req, res) => {
+  const token = String((req.body && req.body.token) || req.query.token || '');
   if (!token) return send(res, 400, { error: 'token required' });
   const user = db.prepare('SELECT id FROM users WHERE verify_token = ?').get(token);
   if (!user) return send(res, 404, { error: 'invalid or used token' });
@@ -139,6 +194,12 @@ app.get('/api/verify', (req, res) => {
   // Redirect to the app so the user sees the success message.
   res.redirect('/?verified=1');
 });
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
 
 app.post('/api/resend-verification', requireAuth, writeLimiter, (req, res) => {
   if (req.user.verified) return send(res, 400, { error: 'already verified' });
