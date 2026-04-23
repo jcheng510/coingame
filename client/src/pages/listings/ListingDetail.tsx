@@ -71,6 +71,13 @@ export default function ListingDetail() {
     onError: (err) => toast.error(err.message),
   });
 
+  const startThread = trpc.messages.startThread.useMutation({
+    onSuccess: ({ id }) => {
+      setLocation(`/messages/${id}`);
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
   if (isLoading) {
     return (
       <div className="max-w-5xl mx-auto animate-pulse">
@@ -240,7 +247,12 @@ export default function ListingDetail() {
               </AlertDialog>
             </div>
           ) : (
-            <Button className="w-full" size="lg" disabled={isSold}>
+            <Button
+              className="w-full"
+              size="lg"
+              disabled={isSold || startThread.isPending || !user}
+              onClick={() => startThread.mutate({ listingId: listing.id })}
+            >
               {isSold ? "Sold" : "Message Seller"}
             </Button>
           )}

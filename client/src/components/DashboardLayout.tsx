@@ -68,6 +68,7 @@ import {
   Heart,
   Tag,
   Store,
+  Inbox as InboxIcon,
 } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
@@ -143,6 +144,7 @@ const menuGroups = [
     items: [
       { icon: Store, label: "Browse", path: "/listings" },
       { icon: Tag, label: "My Listings", path: "/listings/mine" },
+      { icon: InboxIcon, label: "Messages", path: "/messages" },
     ],
   },
   {

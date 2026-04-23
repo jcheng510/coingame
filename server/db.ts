@@ -88,7 +88,9 @@ import {
   InsertCrmContact, InsertCrmTag, InsertWhatsappMessage, InsertCrmInteraction,
   InsertCrmPipeline, InsertCrmDeal, InsertContactCapture, InsertCrmEmailCampaign, InsertCrmCampaignRecipient,
   // Marketplace listings
-  listings, listingPhotos, InsertListing, InsertListingPhoto
+  listings, listingPhotos, InsertListing, InsertListingPhoto,
+  listingThreads, listingMessages, InsertListingThread, InsertListingMessage,
+  ListingThread
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
@@ -8065,4 +8067,173 @@ export async function deleteListingPhotos(listingId: number) {
   const db = await getDb();
   if (!db) return;
   await db.delete(listingPhotos).where(eq(listingPhotos.listingId, listingId));
+}
+
+// ============================================
+// LISTING MESSAGES
+// ============================================
+
+export async function getOrCreateListingThread(args: {
+  listingId: number;
+  buyerId: number;
+  sellerId: number;
+}): Promise<ListingThread> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  const [existing] = await db
+    .select()
+    .from(listingThreads)
+    .where(and(
+      eq(listingThreads.listingId, args.listingId),
+      eq(listingThreads.buyerId, args.buyerId),
+    ));
+  if (existing) return existing;
+
+  const result = await db.insert(listingThreads).values({
+    listingId: args.listingId,
+    buyerId: args.buyerId,
+    sellerId: args.sellerId,
+  });
+  const id = result[0].insertId;
+  const [created] = await db
+    .select()
+    .from(listingThreads)
+    .where(eq(listingThreads.id, id));
+  return created;
+}
+
+export async function getListingThreadById(id: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const [row] = await db
+    .select()
+    .from(listingThreads)
+    .where(eq(listingThreads.id, id));
+  return row ?? null;
+}
+
+export async function getListingThreadsForUser(userId: number) {
+  const db = await getDb();
+  if (!db) return [];
+
+  const threads = await db
+    .select()
+    .from(listingThreads)
+    .where(or(
+      eq(listingThreads.buyerId, userId),
+      eq(listingThreads.sellerId, userId),
+    ))
+    .orderBy(desc(listingThreads.lastMessageAt));
+
+  if (threads.length === 0) return [];
+
+  const listingIds = Array.from(new Set(threads.map(t => t.listingId)));
+  const listingRows = await db
+    .select()
+    .from(listings)
+    .where(inArray(listings.id, listingIds));
+  const photoRows = await db
+    .select()
+    .from(listingPhotos)
+    .where(inArray(listingPhotos.listingId, listingIds));
+
+  const listingById = new Map(listingRows.map(l => [l.id, l]));
+  const photosByListing = new Map<number, typeof photoRows>();
+  for (const p of photoRows) {
+    const arr = photosByListing.get(p.listingId) ?? [];
+    arr.push(p);
+    photosByListing.set(p.listingId, arr);
+  }
+
+  // Last message preview + unread count per thread
+  const threadIds = threads.map(t => t.id);
+  const allMessages = await db
+    .select()
+    .from(listingMessages)
+    .where(inArray(listingMessages.threadId, threadIds))
+    .orderBy(desc(listingMessages.createdAt));
+
+  const lastMessageByThread = new Map<number, typeof allMessages[number]>();
+  const unreadByThread = new Map<number, number>();
+  for (const m of allMessages) {
+    if (!lastMessageByThread.has(m.threadId)) {
+      lastMessageByThread.set(m.threadId, m);
+    }
+    if (m.senderId !== userId && m.readAt === null) {
+      unreadByThread.set(m.threadId, (unreadByThread.get(m.threadId) ?? 0) + 1);
+    }
+  }
+
+  return threads.map(t => {
+    const listing = listingById.get(t.listingId) ?? null;
+    const photos = (photosByListing.get(t.listingId) ?? [])
+      .sort((a, b) => a.position - b.position);
+    return {
+      ...t,
+      listing: listing ? { ...listing, photos } : null,
+      lastMessage: lastMessageByThread.get(t.id) ?? null,
+      unreadCount: unreadByThread.get(t.id) ?? 0,
+      role: t.buyerId === userId ? ("buyer" as const) : ("seller" as const),
+    };
+  });
+}
+
+export async function addListingMessage(data: InsertListingMessage) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const result = await db.insert(listingMessages).values(data);
+  await db
+    .update(listingThreads)
+    .set({ lastMessageAt: new Date() })
+    .where(eq(listingThreads.id, data.threadId));
+  return { id: result[0].insertId };
+}
+
+export async function getListingMessages(threadId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(listingMessages)
+    .where(eq(listingMessages.threadId, threadId))
+    .orderBy(listingMessages.createdAt);
+}
+
+export async function markListingThreadRead(threadId: number, userId: number) {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .update(listingMessages)
+    .set({ readAt: new Date() })
+    .where(and(
+      eq(listingMessages.threadId, threadId),
+      isNull(listingMessages.readAt),
+      sql`${listingMessages.senderId} != ${userId}`,
+    ));
+}
+
+export async function getUnreadListingMessageCount(userId: number) {
+  const db = await getDb();
+  if (!db) return 0;
+
+  const myThreads = await db
+    .select({ id: listingThreads.id })
+    .from(listingThreads)
+    .where(or(
+      eq(listingThreads.buyerId, userId),
+      eq(listingThreads.sellerId, userId),
+    ));
+  if (myThreads.length === 0) return 0;
+
+  const ids = myThreads.map(t => t.id);
+  const rows = await db
+    .select({ c: count() })
+    .from(listingMessages)
+    .where(and(
+      inArray(listingMessages.threadId, ids),
+      isNull(listingMessages.readAt),
+      sql`${listingMessages.senderId} != ${userId}`,
+    ));
+  return Number(rows[0]?.c ?? 0);
 }

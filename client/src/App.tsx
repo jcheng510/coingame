@@ -111,6 +111,8 @@ import Listings from "./pages/listings/Listings";
 import UploadListing from "./pages/listings/UploadListing";
 import ListingDetail from "./pages/listings/ListingDetail";
 import MyListings from "./pages/listings/MyListings";
+import Inbox from "./pages/messages/Inbox";
+import Thread from "./pages/messages/Thread";
 
 function Router() {
   return (
@@ -216,6 +218,10 @@ function Router() {
         <Route path="/listings/:id/edit" component={UploadListing} />
         <Route path="/listings/:id" component={ListingDetail} />
         <Route path="/listings" component={Listings} />
+
+        {/* Messages */}
+        <Route path="/messages/:id" component={Thread} />
+        <Route path="/messages" component={Inbox} />
 
         {/* Fallback */}
         <Route path="/404" component={NotFound} />

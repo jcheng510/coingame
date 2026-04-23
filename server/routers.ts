@@ -12396,6 +12396,110 @@ Ask if they received the original request and if they can provide a quote.`;
         return { success: true };
       }),
   }),
+
+  // ============================================
+  // LISTING MESSAGES (buyer <-> seller chat)
+  // ============================================
+  messages: router({
+    inbox: protectedProcedure.query(({ ctx }) =>
+      db.getListingThreadsForUser(ctx.user.id)
+    ),
+
+    unreadCount: protectedProcedure.query(({ ctx }) =>
+      db.getUnreadListingMessageCount(ctx.user.id)
+    ),
+
+    startThread: protectedProcedure
+      .input(z.object({ listingId: z.number() }))
+      .mutation(async ({ input, ctx }) => {
+        const listing = await db.getListingById(input.listingId);
+        if (!listing) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Listing not found" });
+        }
+        if (listing.sellerId === ctx.user.id) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "You can't message yourself about your own listing",
+          });
+        }
+        const thread = await db.getOrCreateListingThread({
+          listingId: listing.id,
+          buyerId: ctx.user.id,
+          sellerId: listing.sellerId,
+        });
+        return { id: thread.id };
+      }),
+
+    thread: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .query(async ({ input, ctx }) => {
+        const thread = await db.getListingThreadById(input.id);
+        if (!thread) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Thread not found" });
+        }
+        if (
+          thread.buyerId !== ctx.user.id &&
+          thread.sellerId !== ctx.user.id &&
+          ctx.user.role !== "admin"
+        ) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Not your thread" });
+        }
+        const [listing, messages] = await Promise.all([
+          db.getListingById(thread.listingId),
+          db.getListingMessages(thread.id),
+        ]);
+        return {
+          ...thread,
+          listing,
+          messages,
+          role:
+            thread.buyerId === ctx.user.id
+              ? ("buyer" as const)
+              : ("seller" as const),
+        };
+      }),
+
+    send: protectedProcedure
+      .input(z.object({
+        threadId: z.number(),
+        body: z.string().trim().min(1).max(2000),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        const thread = await db.getListingThreadById(input.threadId);
+        if (!thread) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Thread not found" });
+        }
+        if (
+          thread.buyerId !== ctx.user.id &&
+          thread.sellerId !== ctx.user.id
+        ) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Not your thread" });
+        }
+        const { id } = await db.addListingMessage({
+          threadId: input.threadId,
+          senderId: ctx.user.id,
+          body: input.body,
+        });
+        return { id };
+      }),
+
+    markRead: protectedProcedure
+      .input(z.object({ threadId: z.number() }))
+      .mutation(async ({ input, ctx }) => {
+        const thread = await db.getListingThreadById(input.threadId);
+        if (!thread) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Thread not found" });
+        }
+        if (
+          thread.buyerId !== ctx.user.id &&
+          thread.sellerId !== ctx.user.id
+        ) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Not your thread" });
+        }
+        await db.markListingThreadRead(input.threadId, ctx.user.id);
+        return { success: true };
+      }),
+  }),
 });
 
 // Helper function to calculate next generation date for recurring invoices

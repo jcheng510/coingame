@@ -3541,3 +3541,27 @@ export const listingPhotos = mysqlTable("listing_photos", {
 
 export type ListingPhoto = typeof listingPhotos.$inferSelect;
 export type InsertListingPhoto = typeof listingPhotos.$inferInsert;
+
+export const listingThreads = mysqlTable("listing_threads", {
+  id: int("id").autoincrement().primaryKey(),
+  listingId: int("listingId").notNull(),
+  buyerId: int("buyerId").notNull(),
+  sellerId: int("sellerId").notNull(),
+  lastMessageAt: timestamp("lastMessageAt").defaultNow().notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type ListingThread = typeof listingThreads.$inferSelect;
+export type InsertListingThread = typeof listingThreads.$inferInsert;
+
+export const listingMessages = mysqlTable("listing_messages", {
+  id: int("id").autoincrement().primaryKey(),
+  threadId: int("threadId").notNull(),
+  senderId: int("senderId").notNull(),
+  body: text("body").notNull(),
+  readAt: timestamp("readAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type ListingMessage = typeof listingMessages.$inferSelect;
+export type InsertListingMessage = typeof listingMessages.$inferInsert;
