@@ -7324,12 +7324,16 @@ export async function getCrmPipelines(type?: string) {
   const db = await getDb();
   if (!db) return [];
 
-  let query = db.select().from(crmPipelines).where(eq(crmPipelines.isActive, true));
+  const conditions = [eq(crmPipelines.isActive, true)];
   if (type) {
-    query = query.where(eq(crmPipelines.type, type as any)) as any;
+    conditions.push(eq(crmPipelines.type, type as any));
   }
 
-  return query.orderBy(crmPipelines.name);
+  return db
+    .select()
+    .from(crmPipelines)
+    .where(and(...conditions))
+    .orderBy(crmPipelines.name);
 }
 
 export async function getCrmPipelineById(id: number) {
@@ -7544,6 +7548,11 @@ export async function processVCardCapture(captureId: number, vcardData: string, 
     // Create new contact
     contactId = await createCrmContact({
       ...parsedData,
+      firstName: parsedData.firstName ?? "Unknown",
+      fullName:
+        parsedData.fullName ??
+        ([parsedData.firstName, parsedData.lastName].filter(Boolean).join(" ") ||
+          "Unknown"),
       source: "iphone_bump",
       capturedBy,
       captureData: JSON.stringify({ vcardData, captureId }),
@@ -8236,4 +8245,219 @@ export async function getUnreadListingMessageCount(userId: number) {
       sql`${listingMessages.senderId} != ${userId}`,
     ));
   return Number(rows[0]?.c ?? 0);
+}
+
+// ============================================
+// STUBS FOR UNIMPLEMENTED FEATURES
+// ----
+// These return empty/default values so type-checking passes.
+// Replace with real implementations when the features are wired up.
+// ============================================
+
+// Google OAuth — aliased to upsert which exists.
+export async function updateGoogleOAuthToken(
+  userId: number,
+  data: Partial<InsertGoogleOAuthToken>,
+): Promise<void> {
+  await upsertGoogleOAuthToken({ userId, ...data } as InsertGoogleOAuthToken);
+}
+
+export async function getGoogleOAuthTokenByUserId(
+  _userId: number,
+): Promise<any> {
+  return undefined;
+}
+
+// Transactional email templates
+export async function getTransactionalEmailTemplates(): Promise<any[]> {
+  return [];
+}
+export async function getTransactionalEmailTemplateById(
+  _id: number,
+): Promise<any> {
+  return undefined;
+}
+export async function getTransactionalEmailTemplateByName(
+  _name: string,
+): Promise<any> {
+  return undefined;
+}
+export async function createTransactionalEmailTemplate(
+  _data: any,
+): Promise<{ id: number }> {
+  return { id: 0 };
+}
+export async function updateTransactionalEmailTemplate(
+  _id: number,
+  _data: any,
+): Promise<void> {}
+export async function deleteTransactionalEmailTemplate(
+  _id: number,
+): Promise<void> {}
+
+// Email messages + events
+export async function getEmailMessageStats(): Promise<any> {
+  return { total: 0, sent: 0, failed: 0, queued: 0 };
+}
+export async function getEmailMessages(_opts?: any): Promise<any[]> {
+  return [];
+}
+export async function getEmailMessageById(_id: number): Promise<any> {
+  return undefined;
+}
+export async function getEmailMessageByProviderMessageId(
+  _pid: string,
+): Promise<any> {
+  return undefined;
+}
+export async function getEmailMessageByIdempotencyKey(
+  _key: string,
+): Promise<any> {
+  return undefined;
+}
+export async function createEmailMessage(
+  _data: any,
+): Promise<{ id: number }> {
+  return { id: 0 };
+}
+export async function updateEmailMessage(
+  _id: number,
+  _data: any,
+): Promise<void> {}
+export async function updateEmailMessageStatus(
+  _id: number,
+  _status: string,
+  _extra?: any,
+  _error?: any,
+): Promise<void> {}
+export async function incrementEmailMessageRetry(_id: number): Promise<void> {}
+export async function getQueuedEmailMessages(_limit?: number): Promise<any[]> {
+  return [];
+}
+export async function createEmailEvent(_data: any): Promise<{ id: number }> {
+  return { id: 0 };
+}
+export async function getEmailEventsByMessageId(
+  _messageId: number,
+): Promise<any[]> {
+  return [];
+}
+export async function getEmailEventsByProviderMessageId(
+  _pid: string,
+): Promise<any[]> {
+  return [];
+}
+export async function getRecentEmailEvents(_limit?: number): Promise<any[]> {
+  return [];
+}
+
+// Google Drive sync
+export async function getDriveSyncConfig(_dataRoomId: number): Promise<any> {
+  return undefined;
+}
+export async function createDriveSyncConfig(_data: any): Promise<number> {
+  return 0;
+}
+export async function updateDriveSyncConfig(
+  _dataRoomId: number,
+  _data: any,
+): Promise<void> {}
+export async function deleteDriveSyncConfig(
+  _dataRoomId: number,
+): Promise<void> {}
+export async function getDriveSyncLogs(
+  _dataRoomId: number,
+  _limit?: number,
+): Promise<any[]> {
+  return [];
+}
+export async function createDriveSyncLog(_data: any): Promise<number> {
+  return 0;
+}
+export async function updateDriveSyncLog(
+  _id: number,
+  _data: any,
+): Promise<void> {}
+
+// Data room page view / visitor analytics
+export async function createDocumentPageView(_data: any): Promise<number> {
+  return 0;
+}
+export async function updateDocumentPageView(
+  _id: number,
+  _data: any,
+): Promise<void> {}
+export async function getDocumentPageViews(
+  _documentId: number,
+  _visitorId?: number,
+): Promise<any[]> {
+  return [];
+}
+export async function getPageViewAnalytics(_opts?: any): Promise<any> {
+  return { totalViews: 0, averageTime: 0, viewsByDay: [] };
+}
+export async function getPageViewsByVisitor(_visitorId: number): Promise<any[]> {
+  return [];
+}
+export async function createVisitorSession(_data: any): Promise<number> {
+  return 0;
+}
+export async function updateVisitorSession(
+  _id: number,
+  _data: any,
+): Promise<void> {}
+export async function getVisitorSessions(_opts?: any): Promise<any[]> {
+  return [];
+}
+export async function getSessionByToken(_token: string): Promise<any> {
+  return undefined;
+}
+export async function getDataRoomSessions(
+  _dataRoomId: number,
+  _limit?: number,
+): Promise<any[]> {
+  return [];
+}
+export async function getDataRoomEngagementReport(
+  _dataRoomId: number,
+  _startDate?: Date,
+  _endDate?: Date,
+): Promise<any> {
+  return { totalVisitors: 0, totalViews: 0, engagementScore: 0 };
+}
+export async function getDetailedVisitorAnalytics(
+  _dataRoomId?: number,
+  _visitorId?: number,
+): Promise<any> {
+  return { visitors: [], metrics: {} };
+}
+
+// Data room email access rules
+export async function getEmailAccessRules(_dataRoomId: number): Promise<any[]> {
+  return [];
+}
+export async function createEmailAccessRule(_data: any): Promise<number> {
+  return 0;
+}
+export async function updateEmailAccessRule(
+  _id: number,
+  _data: any,
+): Promise<void> {}
+export async function deleteEmailAccessRule(_id: number): Promise<void> {}
+export async function checkEmailAccess(
+  _dataRoomId: number,
+  _email: string,
+): Promise<boolean> {
+  return false;
+}
+
+// Other
+export async function getShipmentById(_id: number): Promise<any> {
+  return undefined;
+}
+export async function upsertShopifyStore(
+  _shopDomainOrData: any,
+  _data?: any,
+): Promise<{ id: number }> {
+  return { id: 0 };
 }

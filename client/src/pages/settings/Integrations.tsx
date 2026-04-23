@@ -37,7 +37,17 @@ export default function IntegrationsPage() {
   const [shopifyConnecting, setShopifyConnecting] = useState(false);
   const [activeTab, setActiveTab] = useState("connections");
 
+  const searchParams = useSearch();
   const { data: status, isLoading, refetch } = trpc.integrations.getStatus.useQuery();
+
+  // QuickBooks OAuth is not yet wired up on the server; these are no-ops so the
+  // UI renders. Replace with real tRPC procedures once QuickBooks is implemented.
+  const getQuickBooksAuthUrlMutation = {
+    refetch: async () => ({ data: { error: "QuickBooks not configured" } as { url?: string; error?: string } }),
+  };
+  const disconnectQuickBooksMutation = {
+    mutate: () => toast.info("QuickBooks disconnect is not yet implemented"),
+  };
   const { data: syncHistory } = trpc.integrations.getSyncHistory.useQuery({ limit: 20 });
 
   // Get OAuth URLs for Gmail and Google Workspace
@@ -73,7 +83,7 @@ export default function IntegrationsPage() {
     },
   });
 
-  const shopifyInitiateOAuthMutation = trpc.integrations.shopify.initiateOAuth.useMutation({
+  const shopifyInitiateOAuthMutation = trpc.shopify.initiateOAuth.useMutation({
     onSuccess: (data) => {
       // Redirect to Shopify OAuth page
       window.location.href = data.authUrl;
@@ -84,7 +94,7 @@ export default function IntegrationsPage() {
     },
   });
 
-  const shopifyDisconnectMutation = trpc.integrations.shopify.disconnect.useMutation({
+  const shopifyDisconnectMutation = trpc.shopify.disconnect.useMutation({
     onSuccess: () => {
       toast.success("Store disconnected successfully");
       refetch();
@@ -94,7 +104,7 @@ export default function IntegrationsPage() {
     },
   });
 
-  const shopifyTestConnectionMutation = trpc.integrations.shopify.testConnection.useMutation({
+  const shopifyTestConnectionMutation = trpc.shopify.testConnection.useMutation({
     onSuccess: (data) => {
       toast.success(data.message);
     },
@@ -152,7 +162,7 @@ export default function IntegrationsPage() {
       return;
     }
     setShopifyConnecting(true);
-    shopifyInitiateOAuthMutation.mutate({ shop: shopifyShopDomain });
+    shopifyInitiateOAuthMutation.mutate({ shopDomain: shopifyShopDomain });
   };
 
   const getStatusBadge = (status: string) => {
@@ -419,7 +429,7 @@ export default function IntegrationsPage() {
                 <CardContent>
                   <p className="text-sm text-muted-foreground mb-4">
                     {status?.quickbooks?.configured 
-                      ? `Connected to QuickBooks company ${status.quickbooks.realmId}. Sync financial data automatically.`
+                      ? `Connected to QuickBooks company ${(status.quickbooks as any).realmId}. Sync financial data automatically.`
                       : "Connect QuickBooks for automatic financial sync. Add QUICKBOOKS_CLIENT_ID and QUICKBOOKS_CLIENT_SECRET in Settings → Secrets."}
                   </p>
                   <Button 
@@ -954,7 +964,7 @@ export default function IntegrationsPage() {
                     </h4>
                     <p className="text-sm text-muted-foreground">
                       {status?.quickbooks?.configured 
-                        ? `Connected to company ${status.quickbooks.realmId}`
+                        ? `Connected to company ${(status.quickbooks as any).realmId}`
                         : 'Connect your QuickBooks account to sync financial data'}
                     </p>
                   </div>
@@ -1014,7 +1024,7 @@ export default function IntegrationsPage() {
                         <div className="space-y-2 text-sm">
                           <div className="flex justify-between">
                             <span className="text-muted-foreground">Company ID:</span>
-                            <span className="font-medium">{status.quickbooks.realmId}</span>
+                            <span className="font-medium">{(status.quickbooks as any).realmId}</span>
                           </div>
                           <div className="flex justify-between">
                             <span className="text-muted-foreground">Status:</span>

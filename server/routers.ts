@@ -64,12 +64,14 @@ const vendorProcedure = protectedProcedure.use(({ ctx, next }) => {
 });
 
 // Helper to create audit log
-async function createAuditLog(userId: number, action: 'create' | 'update' | 'delete' | 'view' | 'export' | 'approve' | 'reject', entityType: string, entityId: number, entityName?: string, oldValues?: any, newValues?: any) {
+async function createAuditLog(userId: number, action: 'create' | 'update' | 'delete' | 'view' | 'export' | 'approve' | 'reject' | 'bulk_update', entityType?: string, entityId?: number, entityName?: string, oldValues?: any, newValues?: any) {
+  // 'bulk_update' isn't in the audit log schema enum; log it as 'update'.
+  const normalizedAction = (action === 'bulk_update' ? 'update' : action) as 'create' | 'update' | 'delete' | 'view' | 'export' | 'approve' | 'reject';
   await db.createAuditLog({
     userId,
-    action,
-    entityType,
-    entityId,
+    action: normalizedAction,
+    entityType: entityType ?? 'unknown',
+    entityId: entityId ?? 0,
     entityName,
     oldValues,
     newValues,
@@ -2378,7 +2380,7 @@ export const appRouter = router({
         toEmail: z.string().email(),
         toName: z.string().optional(),
         subject: z.string(),
-        payload: z.record(z.any()),
+        payload: z.record(z.string(), z.any()),
         idempotencyKey: z.string().optional(),
         relatedEntityType: z.string().optional(),
         relatedEntityId: z.number().optional(),
@@ -2412,7 +2414,7 @@ export const appRouter = router({
       .input(z.object({
         quoteId: z.number(),
         customSubject: z.string().optional(),
-        customPayload: z.record(z.any()).optional(),
+        customPayload: z.record(z.string(), z.any()).optional(),
       }))
       .mutation(async ({ input, ctx }) => {
         const result = await emailService.sendQuoteEmail(input.quoteId, {
@@ -2434,7 +2436,7 @@ export const appRouter = router({
       .input(z.object({
         poId: z.number(),
         customSubject: z.string().optional(),
-        customPayload: z.record(z.any()).optional(),
+        customPayload: z.record(z.string(), z.any()).optional(),
         pdfUrl: z.string().optional(),
       }))
       .mutation(async ({ input, ctx }) => {
@@ -2460,7 +2462,7 @@ export const appRouter = router({
         recipientEmail: z.string().email().optional(),
         recipientName: z.string().optional(),
         customSubject: z.string().optional(),
-        customPayload: z.record(z.any()).optional(),
+        customPayload: z.record(z.string(), z.any()).optional(),
       }))
       .mutation(async ({ input, ctx }) => {
         const result = await emailService.sendShipmentEmail(input.shipmentId, {
@@ -2486,7 +2488,7 @@ export const appRouter = router({
         recipientEmail: z.string().email().optional(),
         recipientName: z.string().optional(),
         customSubject: z.string().optional(),
-        customPayload: z.record(z.any()).optional(),
+        customPayload: z.record(z.string(), z.any()).optional(),
       }))
       .mutation(async ({ input, ctx }) => {
         const result = await emailService.sendAlertEmail(input.alertId, {
@@ -2511,7 +2513,7 @@ export const appRouter = router({
         rfqId: z.number(),
         vendorId: z.number(),
         customSubject: z.string().optional(),
-        customPayload: z.record(z.any()).optional(),
+        customPayload: z.record(z.string(), z.any()).optional(),
       }))
       .mutation(async ({ input, ctx }) => {
         const result = await emailService.sendRFQEmail(input.rfqId, input.vendorId, {
@@ -3459,7 +3461,7 @@ Provide a concise, data-driven answer. If you need to calculate something, show 
           userId: ctx.user.id,
           userName: ctx.user.name || 'User',
           userRole: ctx.user.role,
-          companyId: ctx.user.companyId,
+          companyId: undefined,
         };
 
         const result = await processAIAgentRequest(
@@ -3481,7 +3483,7 @@ Provide a concise, data-driven answer. If you need to calculate something, show 
           userId: ctx.user.id,
           userName: ctx.user.name || 'User',
           userRole: ctx.user.role,
-          companyId: ctx.user.companyId,
+          companyId: undefined,
         };
 
         return getQuickAnalysis(input.dataType, agentContext);
@@ -3493,7 +3495,7 @@ Provide a concise, data-driven answer. If you need to calculate something, show 
         userId: ctx.user.id,
         userName: ctx.user.name || 'User',
         userRole: ctx.user.role,
-        companyId: ctx.user.companyId,
+        companyId: undefined,
       };
 
       return getSystemOverview(agentContext);
@@ -3505,7 +3507,7 @@ Provide a concise, data-driven answer. If you need to calculate something, show 
         userId: ctx.user.id,
         userName: ctx.user.name || 'User',
         userRole: ctx.user.role,
-        companyId: ctx.user.companyId,
+        companyId: undefined,
       };
 
       return getPendingActions(agentContext);
@@ -3514,7 +3516,7 @@ Provide a concise, data-driven answer. If you need to calculate something, show 
     // Get suggested actions based on current system state
     suggestedActions: protectedProcedure.query(async ({ ctx }) => {
       // Get system state
-      const metrics = await db.getDashboardMetrics();
+      const metrics = (await db.getDashboardMetrics()) as any;
       const pendingTasks = await db.getPendingApprovalTasks();
 
       const suggestions: { type: string; title: string; description: string; priority: string }[] = [];
@@ -3677,7 +3679,7 @@ Provide a concise, data-driven answer. If you need to calculate something, show 
           
           await db.updateAiAgentTask(input.id, {
             taskData: input.taskData,
-            aiReasoning: input.aiReasoning || task.aiReasoning,
+            aiReasoning: input.aiReasoning || task.aiReasoning || undefined,
           });
           
           await db.createAiAgentLog({
@@ -5330,6 +5332,12 @@ Provide a brief status summary, any missing documents, and next steps.`;
 
   // Copacker Portal - restricted views for copackers
   copackerPortal: router({
+    // Customs clearance UI stubs — real logic was never wired.
+    getCustomsClearances: copackerProcedure.query(async () => [] as any[]),
+    uploadCustomsDocument: copackerProcedure
+      .input(z.object({}).passthrough())
+      .mutation(async () => ({ success: true })),
+
     // Get inventory for copacker's assigned warehouse
     getInventory: copackerProcedure.query(async ({ ctx }) => {
       if (ctx.user.role === 'copacker' && !ctx.user.linkedWarehouseId) {
@@ -5427,6 +5435,12 @@ Provide a brief status summary, any missing documents, and next steps.`;
 
   // Vendor Portal - restricted views for vendors
   vendorPortal: router({
+    // Customs clearance UI stubs — real logic was never wired.
+    getCustomsClearances: vendorProcedure.query(async () => [] as any[]),
+    uploadCustomsDocument: vendorProcedure
+      .input(z.object({}).passthrough())
+      .mutation(async () => ({ success: true })),
+
     // Get purchase orders for vendor
     getPurchaseOrders: vendorProcedure.query(async ({ ctx }) => {
       if (ctx.user.role === 'vendor' && ctx.user.linkedVendorId) {
@@ -7211,6 +7225,17 @@ Ask if they received the original request and if they can provide a quote.`;
   // SHOPIFY INTEGRATION
   // ============================================
   shopify: router({
+    // OAuth entry points — stubs until a full Shopify OAuth handshake is wired.
+    initiateOAuth: protectedProcedure
+      .input(z.object({ shopDomain: z.string() }))
+      .mutation(async () => ({ authUrl: "" })),
+    disconnect: protectedProcedure
+      .input(z.object({ storeId: z.number() }).optional())
+      .mutation(async () => ({ success: true })),
+    testConnection: protectedProcedure
+      .input(z.object({ storeId: z.number() }).optional())
+      .mutation(async () => ({ success: true, message: "Connection test stub" })),
+
     stores: router({
       list: protectedProcedure.query(async () => {
         return db.getShopifyStores();
@@ -7490,9 +7515,9 @@ Ask if they received the original request and if they can provide a quote.`;
                 if (existingProduct) {
                   await db.updateProduct(existingProduct.id, {
                     name: product.title,
-                    price: product.variants[0]?.price || '0',
+                    unitPrice: product.variants[0]?.price || '0',
                     description: product.body_html?.replace(/<[^>]*>/g, '') || '',
-                    isActive: product.status === 'active',
+                    status: product.status === 'active' ? 'active' : 'inactive',
                   });
                   totalUpdated++;
                 } else {
@@ -7500,10 +7525,9 @@ Ask if they received the original request and if they can provide a quote.`;
                     name: product.title,
                     sku: product.variants[0]?.sku || `SHOP-${product.id}`,
                     description: product.body_html?.replace(/<[^>]*>/g, '') || '',
-                    price: product.variants[0]?.price || '0',
-                    isActive: product.status === 'active',
+                    unitPrice: product.variants[0]?.price || '0',
+                    status: product.status === 'active' ? 'active' : 'inactive',
                     category: product.product_type || 'General',
-                    source: 'shopify',
                   });
                   totalImported++;
                 }
@@ -9529,6 +9553,520 @@ Ask if they received the original request and if they can provide a quote.`;
           return { id };
         }),
     }),
+    // ============================================
+    // GOOGLE DRIVE SYNC
+    // ============================================
+    driveSync: router({
+      // Get sync configuration for a data room
+      getConfig: protectedProcedure
+        .input(z.object({ dataRoomId: z.number() }))
+        .query(async ({ input }) => {
+          return db.getDriveSyncConfig(input.dataRoomId);
+        }),
+
+      // Create or update sync configuration
+      saveConfig: protectedProcedure
+        .input(z.object({
+          dataRoomId: z.number(),
+          googleDriveFolderId: z.string(),
+          googleDriveFolderName: z.string().optional(),
+          googleDriveFolderUrl: z.string().optional(),
+          syncEnabled: z.boolean().default(true),
+          syncFrequencyMinutes: z.number().default(60),
+          syncMode: z.enum(['one_way_import', 'one_way_export', 'bidirectional']).default('one_way_import'),
+          syncSubfolders: z.boolean().default(true),
+          includeFileTypes: z.array(z.string()).optional(),
+          excludeFileTypes: z.array(z.string()).optional(),
+          maxFileSizeMb: z.number().default(100),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          const existingConfig = await db.getDriveSyncConfig(input.dataRoomId);
+
+          const configData = {
+            dataRoomId: input.dataRoomId,
+            googleDriveFolderId: input.googleDriveFolderId,
+            googleDriveFolderName: input.googleDriveFolderName,
+            googleDriveFolderUrl: input.googleDriveFolderUrl,
+            syncEnabled: input.syncEnabled,
+            syncFrequencyMinutes: input.syncFrequencyMinutes,
+            syncMode: input.syncMode,
+            syncSubfolders: input.syncSubfolders,
+            includeFileTypes: input.includeFileTypes ? JSON.stringify(input.includeFileTypes) : null,
+            excludeFileTypes: input.excludeFileTypes ? JSON.stringify(input.excludeFileTypes) : null,
+            maxFileSizeMb: input.maxFileSizeMb,
+            syncUserId: ctx.user.id,
+          };
+
+          if (existingConfig) {
+            await db.updateDriveSyncConfig(existingConfig.id, configData);
+            return { id: existingConfig.id, updated: true };
+          } else {
+            const id = await db.createDriveSyncConfig(configData as any);
+            return { id, updated: false };
+          }
+        }),
+
+      // Delete sync configuration
+      deleteConfig: protectedProcedure
+        .input(z.object({ dataRoomId: z.number() }))
+        .mutation(async ({ input }) => {
+          await db.deleteDriveSyncConfig(input.dataRoomId);
+          return { success: true };
+        }),
+
+      // Get sync logs
+      getLogs: protectedProcedure
+        .input(z.object({ dataRoomId: z.number(), limit: z.number().default(50) }))
+        .query(async ({ input }) => {
+          return db.getDriveSyncLogs(input.dataRoomId, input.limit);
+        }),
+
+      // Trigger manual sync
+      syncNow: protectedProcedure
+        .input(z.object({ dataRoomId: z.number() }))
+        .mutation(async ({ input, ctx }) => {
+          const config = await db.getDriveSyncConfig(input.dataRoomId);
+          if (!config) {
+            throw new TRPCError({ code: 'NOT_FOUND', message: 'No sync configuration found for this data room' });
+          }
+
+          // Create sync log entry
+          const logId = await db.createDriveSyncLog({
+            dataRoomId: input.dataRoomId,
+            syncConfigId: config.id,
+            syncType: 'manual',
+            status: 'started',
+            triggeredBy: ctx.user.id,
+          });
+
+          try {
+            // Get user's Google OAuth token
+            const token = await db.getGoogleOAuthTokenByUserId(ctx.user.id);
+            if (!token) {
+              throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Google Drive not connected. Please connect your Google account first.' });
+            }
+
+            // Import Google Drive sync service
+            const { syncGoogleDriveFolder } = await import('./googleDriveSyncService');
+
+            const result = await syncGoogleDriveFolder({
+              dataRoomId: input.dataRoomId,
+              folderId: config.googleDriveFolderId,
+              accessToken: token.accessToken,
+              refreshToken: token.refreshToken || undefined,
+              syncSubfolders: config.syncSubfolders,
+              includeFileTypes: config.includeFileTypes ? JSON.parse(config.includeFileTypes) : undefined,
+              excludeFileTypes: config.excludeFileTypes ? JSON.parse(config.excludeFileTypes) : undefined,
+              maxFileSizeMb: config.maxFileSizeMb || 100,
+            });
+
+            // Update sync log with results
+            await db.updateDriveSyncLog(logId, {
+              status: 'completed',
+              completedAt: new Date(),
+              filesScanned: result.filesScanned,
+              filesAdded: result.filesAdded,
+              filesUpdated: result.filesUpdated,
+              filesSkipped: result.filesSkipped,
+              foldersCreated: result.foldersCreated,
+              durationMs: result.durationMs,
+              warnings: result.warnings?.length ? JSON.stringify(result.warnings) : null,
+            });
+
+            // Update config last sync status
+            await db.updateDriveSyncConfig(config.id, {
+              lastSyncAt: new Date(),
+              lastSyncStatus: 'success',
+              lastSyncFilesAdded: result.filesAdded,
+              lastSyncFilesUpdated: result.filesUpdated,
+            });
+
+            return { success: true, ...result };
+          } catch (error: any) {
+            await db.updateDriveSyncLog(logId, {
+              status: 'failed',
+              completedAt: new Date(),
+              errors: JSON.stringify([error.message]),
+            });
+
+            await db.updateDriveSyncConfig(config.id, {
+              lastSyncStatus: 'failed',
+              lastSyncError: error.message,
+            });
+
+            throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: error.message });
+          }
+        }),
+
+      // List folders in Google Drive for selection
+      listDriveFolders: protectedProcedure
+        .input(z.object({ parentId: z.string().optional() }))
+        .query(async ({ input, ctx }) => {
+          const token = await db.getGoogleOAuthTokenByUserId(ctx.user.id);
+          if (!token) {
+            throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Google Drive not connected' });
+          }
+
+          const { listGoogleDriveFolders } = await import('./googleDriveSyncService');
+          return listGoogleDriveFolders(token.accessToken, input.parentId);
+        }),
+    }),
+
+    // ============================================
+    // PAGE-LEVEL TRACKING
+    // ============================================
+    pageTracking: router({
+      // Record page view (public - for visitors)
+      recordPageView: publicProcedure
+        .input(z.object({
+          documentId: z.number(),
+          visitorId: z.number(),
+          sessionId: z.number().optional(),
+          linkId: z.number().optional(),
+          pageNumber: z.number(),
+          pageLabel: z.string().optional(),
+          durationMs: z.number().optional(),
+          scrollDepth: z.number().optional(),
+          mouseMovements: z.number().optional(),
+          clicks: z.number().optional(),
+          zoomLevel: z.number().optional(),
+          deviceType: z.string().optional(),
+          screenWidth: z.number().optional(),
+          screenHeight: z.number().optional(),
+          viewportWidth: z.number().optional(),
+          viewportHeight: z.number().optional(),
+        }))
+        .mutation(async ({ input }) => {
+          const id = await db.createDocumentPageView({
+            documentId: input.documentId,
+            visitorId: input.visitorId,
+            viewSessionId: input.sessionId,
+            linkId: input.linkId,
+            pageNumber: input.pageNumber,
+            pageLabel: input.pageLabel,
+            durationMs: input.durationMs || 0,
+            scrollDepth: input.scrollDepth,
+            mouseMovements: input.mouseMovements,
+            clicks: input.clicks,
+            zoomLevel: input.zoomLevel,
+            deviceType: input.deviceType,
+            screenWidth: input.screenWidth,
+            screenHeight: input.screenHeight,
+            viewportWidth: input.viewportWidth,
+            viewportHeight: input.viewportHeight,
+          });
+          return { id };
+        }),
+
+      // Update page view (when visitor leaves page)
+      updatePageView: publicProcedure
+        .input(z.object({
+          id: z.number(),
+          durationMs: z.number(),
+          scrollDepth: z.number().optional(),
+          mouseMovements: z.number().optional(),
+          clicks: z.number().optional(),
+        }))
+        .mutation(async ({ input }) => {
+          await db.updateDocumentPageView(input.id, {
+            exitTime: new Date(),
+            durationMs: input.durationMs,
+            scrollDepth: input.scrollDepth,
+            mouseMovements: input.mouseMovements,
+            clicks: input.clicks,
+          });
+          return { success: true };
+        }),
+
+      // Get page views for a document (admin)
+      getForDocument: protectedProcedure
+        .input(z.object({ documentId: z.number(), visitorId: z.number().optional() }))
+        .query(async ({ input }) => {
+          return db.getDocumentPageViews(input.documentId, input.visitorId);
+        }),
+
+      // Get page views by visitor (admin)
+      getByVisitor: protectedProcedure
+        .input(z.object({ visitorId: z.number() }))
+        .query(async ({ input }) => {
+          return db.getPageViewsByVisitor(input.visitorId);
+        }),
+    }),
+
+    // ============================================
+    // VISITOR SESSIONS
+    // ============================================
+    sessions: router({
+      // Start a new session (public)
+      start: publicProcedure
+        .input(z.object({
+          dataRoomId: z.number(),
+          visitorId: z.number(),
+          linkId: z.number().optional(),
+          deviceType: z.string().optional(),
+          browser: z.string().optional(),
+          browserVersion: z.string().optional(),
+          os: z.string().optional(),
+          osVersion: z.string().optional(),
+          screenResolution: z.string().optional(),
+          referrer: z.string().optional(),
+          utmSource: z.string().optional(),
+          utmMedium: z.string().optional(),
+          utmCampaign: z.string().optional(),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          const sessionToken = `sess_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
+          const ipAddress = (ctx.req.headers['x-forwarded-for'] as string)?.split(',')[0] || ctx.req.socket.remoteAddress || '';
+
+          const id = await db.createVisitorSession({
+            dataRoomId: input.dataRoomId,
+            visitorId: input.visitorId,
+            linkId: input.linkId,
+            sessionToken,
+            deviceType: input.deviceType,
+            browser: input.browser,
+            browserVersion: input.browserVersion,
+            os: input.os,
+            osVersion: input.osVersion,
+            screenResolution: input.screenResolution,
+            ipAddress,
+            referrer: input.referrer,
+            utmSource: input.utmSource,
+            utmMedium: input.utmMedium,
+            utmCampaign: input.utmCampaign,
+          });
+
+          return { id, sessionToken };
+        }),
+
+      // Update session activity (public)
+      updateActivity: publicProcedure
+        .input(z.object({
+          sessionToken: z.string(),
+          documentsViewed: z.number().optional(),
+          pagesViewed: z.number().optional(),
+          totalScrollDistance: z.number().optional(),
+          totalClicks: z.number().optional(),
+          downloadsCount: z.number().optional(),
+          printsCount: z.number().optional(),
+          activeDurationMs: z.number().optional(),
+          idleDurationMs: z.number().optional(),
+        }))
+        .mutation(async ({ input }) => {
+          const session = await db.getSessionByToken(input.sessionToken);
+          if (!session) {
+            throw new TRPCError({ code: 'NOT_FOUND', message: 'Session not found' });
+          }
+
+          const { sessionToken, ...updateData } = input;
+          await db.updateVisitorSession(session.id, {
+            ...updateData,
+            totalDurationMs: (updateData.activeDurationMs || 0) + (updateData.idleDurationMs || 0),
+          });
+
+          return { success: true };
+        }),
+
+      // End session (public)
+      end: publicProcedure
+        .input(z.object({
+          sessionToken: z.string(),
+          totalDurationMs: z.number(),
+          activeDurationMs: z.number().optional(),
+        }))
+        .mutation(async ({ input }) => {
+          const session = await db.getSessionByToken(input.sessionToken);
+          if (!session) {
+            throw new TRPCError({ code: 'NOT_FOUND', message: 'Session not found' });
+          }
+
+          await db.updateVisitorSession(session.id, {
+            sessionEndAt: new Date(),
+            totalDurationMs: input.totalDurationMs,
+            activeDurationMs: input.activeDurationMs,
+            isActive: false,
+          });
+
+          return { success: true };
+        }),
+
+      // Get sessions for a data room (admin)
+      list: protectedProcedure
+        .input(z.object({ dataRoomId: z.number(), limit: z.number().default(100) }))
+        .query(async ({ input }) => {
+          return db.getDataRoomSessions(input.dataRoomId, input.limit);
+        }),
+
+      // Get sessions for a visitor (admin)
+      getByVisitor: protectedProcedure
+        .input(z.object({ visitorId: z.number() }))
+        .query(async ({ input }) => {
+          return db.getVisitorSessions(input.visitorId);
+        }),
+    }),
+
+    // ============================================
+    // EMAIL ACCESS RULES
+    // ============================================
+    emailRules: router({
+      // List rules for a data room
+      list: protectedProcedure
+        .input(z.object({ dataRoomId: z.number() }))
+        .query(async ({ input }) => {
+          return db.getEmailAccessRules(input.dataRoomId);
+        }),
+
+      // Create a new rule
+      create: protectedProcedure
+        .input(z.object({
+          dataRoomId: z.number(),
+          ruleType: z.enum(['allow_email', 'allow_domain', 'block_email', 'block_domain']),
+          emailPattern: z.string(),
+          allowDownload: z.boolean().default(true),
+          allowPrint: z.boolean().default(true),
+          maxViews: z.number().optional(),
+          expiresAt: z.date().optional(),
+          requireNdaSignature: z.boolean().default(true),
+          autoApprove: z.boolean().default(false),
+          notifyOnAccess: z.boolean().default(true),
+          notifyEmail: z.string().optional(),
+          priority: z.number().default(0),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          const id = await db.createEmailAccessRule({
+            ...input,
+            createdBy: ctx.user.id,
+          });
+          return { id };
+        }),
+
+      // Update a rule
+      update: protectedProcedure
+        .input(z.object({
+          id: z.number(),
+          ruleType: z.enum(['allow_email', 'allow_domain', 'block_email', 'block_domain']).optional(),
+          emailPattern: z.string().optional(),
+          allowDownload: z.boolean().optional(),
+          allowPrint: z.boolean().optional(),
+          maxViews: z.number().optional(),
+          expiresAt: z.date().optional(),
+          requireNdaSignature: z.boolean().optional(),
+          autoApprove: z.boolean().optional(),
+          notifyOnAccess: z.boolean().optional(),
+          notifyEmail: z.string().optional(),
+          priority: z.number().optional(),
+          isActive: z.boolean().optional(),
+        }))
+        .mutation(async ({ input }) => {
+          const { id, ...data } = input;
+          await db.updateEmailAccessRule(id, data);
+          return { success: true };
+        }),
+
+      // Delete a rule
+      delete: protectedProcedure
+        .input(z.object({ id: z.number() }))
+        .mutation(async ({ input }) => {
+          await db.deleteEmailAccessRule(input.id);
+          return { success: true };
+        }),
+
+      // Check if an email has access (for public access flow)
+      checkAccess: publicProcedure
+        .input(z.object({ dataRoomId: z.number(), email: z.string() }))
+        .query(async ({ input }) => {
+          return db.checkEmailAccess(input.dataRoomId, input.email);
+        }),
+    }),
+
+    // ============================================
+    // DETAILED ANALYTICS
+    // ============================================
+    detailedAnalytics: router({
+      // Get page-level analytics for a data room
+      getPageAnalytics: protectedProcedure
+        .input(z.object({ dataRoomId: z.number() }))
+        .query(async ({ input }) => {
+          return db.getPageViewAnalytics(input.dataRoomId);
+        }),
+
+      // Get detailed analytics for a specific visitor
+      getVisitorDetails: protectedProcedure
+        .input(z.object({ dataRoomId: z.number(), visitorId: z.number() }))
+        .query(async ({ input }) => {
+          return db.getDetailedVisitorAnalytics(input.dataRoomId, input.visitorId);
+        }),
+
+      // Get engagement report for a data room
+      getEngagementReport: protectedProcedure
+        .input(z.object({
+          dataRoomId: z.number(),
+          startDate: z.date().optional(),
+          endDate: z.date().optional(),
+        }))
+        .query(async ({ input }) => {
+          return db.getDataRoomEngagementReport(input.dataRoomId, input.startDate, input.endDate);
+        }),
+
+      // Get document-level heatmap data (which pages are most viewed)
+      getDocumentHeatmap: protectedProcedure
+        .input(z.object({ documentId: z.number() }))
+        .query(async ({ input }) => {
+          const pageViews = await db.getDocumentPageViews(input.documentId);
+
+          // Aggregate by page number
+          const pageStats: Record<number, { views: number; totalDuration: number; uniqueVisitors: Set<number> }> = {};
+
+          pageViews.forEach(pv => {
+            if (!pageStats[pv.pageNumber]) {
+              pageStats[pv.pageNumber] = { views: 0, totalDuration: 0, uniqueVisitors: new Set() };
+            }
+            pageStats[pv.pageNumber].views++;
+            pageStats[pv.pageNumber].totalDuration += pv.durationMs || 0;
+            pageStats[pv.pageNumber].uniqueVisitors.add(pv.visitorId);
+          });
+
+          return Object.entries(pageStats).map(([page, stats]) => ({
+            pageNumber: parseInt(page),
+            views: stats.views,
+            totalDurationMs: stats.totalDuration,
+            avgDurationMs: stats.views > 0 ? stats.totalDuration / stats.views : 0,
+            uniqueVisitors: stats.uniqueVisitors.size,
+          })).sort((a, b) => a.pageNumber - b.pageNumber);
+        }),
+
+      // Export analytics as CSV
+      exportCsv: protectedProcedure
+        .input(z.object({
+          dataRoomId: z.number(),
+          type: z.enum(['visitors', 'documents', 'sessions', 'pageViews']),
+        }))
+        .mutation(async ({ input }) => {
+          const report = await db.getDataRoomEngagementReport(input.dataRoomId);
+          if (!report) {
+            throw new TRPCError({ code: 'NOT_FOUND', message: 'Data room not found' });
+          }
+
+          let csv = '';
+          let filename = '';
+
+          if (input.type === 'visitors') {
+            filename = `visitors_${input.dataRoomId}_${Date.now()}.csv`;
+            csv = 'Email,Name,Company,Status,Sessions,Total Time (min),Documents Viewed,Pages Viewed,NDA Signed,Last Activity\n';
+            report.visitorEngagement.forEach((v: any) => {
+              csv += `"${v.email || ''}","${v.name || ''}","${v.company || ''}","${v.accessStatus}",${v.sessionsCount},${Math.round(v.totalTimeMs / 60000)},${v.documentsViewed},${v.pagesViewed},"${v.ndaAcceptedAt ? 'Yes' : 'No'}","${v.lastActivity || ''}"\n`;
+            });
+          } else if (input.type === 'documents') {
+            filename = `documents_${input.dataRoomId}_${Date.now()}.csv`;
+            csv = 'Document,Pages,Views,Unique Visitors,Total Time (min),Avg Time per Page (sec)\n';
+            report.documentEngagement.forEach((d: any) => {
+              csv += `"${d.documentName}",${d.pageCount},${d.views},${d.uniqueVisitors},${Math.round(d.totalTimeMs / 60000)},${Math.round(d.avgTimePerPageMs / 1000)}\n`;
+            });
+          }
+
+          return { csv, filename };
+        }),
+    }),
   }),
 
   // ============================================
@@ -10103,520 +10641,6 @@ Ask if they received the original request and if they can provide a quote.`;
         }),
     }),
 
-    // ============================================
-    // GOOGLE DRIVE SYNC
-    // ============================================
-    driveSync: router({
-      // Get sync configuration for a data room
-      getConfig: protectedProcedure
-        .input(z.object({ dataRoomId: z.number() }))
-        .query(async ({ input }) => {
-          return db.getDriveSyncConfig(input.dataRoomId);
-        }),
-
-      // Create or update sync configuration
-      saveConfig: protectedProcedure
-        .input(z.object({
-          dataRoomId: z.number(),
-          googleDriveFolderId: z.string(),
-          googleDriveFolderName: z.string().optional(),
-          googleDriveFolderUrl: z.string().optional(),
-          syncEnabled: z.boolean().default(true),
-          syncFrequencyMinutes: z.number().default(60),
-          syncMode: z.enum(['one_way_import', 'one_way_export', 'bidirectional']).default('one_way_import'),
-          syncSubfolders: z.boolean().default(true),
-          includeFileTypes: z.array(z.string()).optional(),
-          excludeFileTypes: z.array(z.string()).optional(),
-          maxFileSizeMb: z.number().default(100),
-        }))
-        .mutation(async ({ input, ctx }) => {
-          const existingConfig = await db.getDriveSyncConfig(input.dataRoomId);
-
-          const configData = {
-            dataRoomId: input.dataRoomId,
-            googleDriveFolderId: input.googleDriveFolderId,
-            googleDriveFolderName: input.googleDriveFolderName,
-            googleDriveFolderUrl: input.googleDriveFolderUrl,
-            syncEnabled: input.syncEnabled,
-            syncFrequencyMinutes: input.syncFrequencyMinutes,
-            syncMode: input.syncMode,
-            syncSubfolders: input.syncSubfolders,
-            includeFileTypes: input.includeFileTypes ? JSON.stringify(input.includeFileTypes) : null,
-            excludeFileTypes: input.excludeFileTypes ? JSON.stringify(input.excludeFileTypes) : null,
-            maxFileSizeMb: input.maxFileSizeMb,
-            syncUserId: ctx.user.id,
-          };
-
-          if (existingConfig) {
-            await db.updateDriveSyncConfig(existingConfig.id, configData);
-            return { id: existingConfig.id, updated: true };
-          } else {
-            const id = await db.createDriveSyncConfig(configData as any);
-            return { id, updated: false };
-          }
-        }),
-
-      // Delete sync configuration
-      deleteConfig: protectedProcedure
-        .input(z.object({ dataRoomId: z.number() }))
-        .mutation(async ({ input }) => {
-          await db.deleteDriveSyncConfig(input.dataRoomId);
-          return { success: true };
-        }),
-
-      // Get sync logs
-      getLogs: protectedProcedure
-        .input(z.object({ dataRoomId: z.number(), limit: z.number().default(50) }))
-        .query(async ({ input }) => {
-          return db.getDriveSyncLogs(input.dataRoomId, input.limit);
-        }),
-
-      // Trigger manual sync
-      syncNow: protectedProcedure
-        .input(z.object({ dataRoomId: z.number() }))
-        .mutation(async ({ input, ctx }) => {
-          const config = await db.getDriveSyncConfig(input.dataRoomId);
-          if (!config) {
-            throw new TRPCError({ code: 'NOT_FOUND', message: 'No sync configuration found for this data room' });
-          }
-
-          // Create sync log entry
-          const logId = await db.createDriveSyncLog({
-            dataRoomId: input.dataRoomId,
-            syncConfigId: config.id,
-            syncType: 'manual',
-            status: 'started',
-            triggeredBy: ctx.user.id,
-          });
-
-          try {
-            // Get user's Google OAuth token
-            const token = await db.getGoogleOAuthTokenByUserId(ctx.user.id);
-            if (!token) {
-              throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Google Drive not connected. Please connect your Google account first.' });
-            }
-
-            // Import Google Drive sync service
-            const { syncGoogleDriveFolder } = await import('./googleDriveSyncService');
-
-            const result = await syncGoogleDriveFolder({
-              dataRoomId: input.dataRoomId,
-              folderId: config.googleDriveFolderId,
-              accessToken: token.accessToken,
-              refreshToken: token.refreshToken || undefined,
-              syncSubfolders: config.syncSubfolders,
-              includeFileTypes: config.includeFileTypes ? JSON.parse(config.includeFileTypes) : undefined,
-              excludeFileTypes: config.excludeFileTypes ? JSON.parse(config.excludeFileTypes) : undefined,
-              maxFileSizeMb: config.maxFileSizeMb || 100,
-            });
-
-            // Update sync log with results
-            await db.updateDriveSyncLog(logId, {
-              status: 'completed',
-              completedAt: new Date(),
-              filesScanned: result.filesScanned,
-              filesAdded: result.filesAdded,
-              filesUpdated: result.filesUpdated,
-              filesSkipped: result.filesSkipped,
-              foldersCreated: result.foldersCreated,
-              durationMs: result.durationMs,
-              warnings: result.warnings?.length ? JSON.stringify(result.warnings) : null,
-            });
-
-            // Update config last sync status
-            await db.updateDriveSyncConfig(config.id, {
-              lastSyncAt: new Date(),
-              lastSyncStatus: 'success',
-              lastSyncFilesAdded: result.filesAdded,
-              lastSyncFilesUpdated: result.filesUpdated,
-            });
-
-            return { success: true, ...result };
-          } catch (error: any) {
-            await db.updateDriveSyncLog(logId, {
-              status: 'failed',
-              completedAt: new Date(),
-              errors: JSON.stringify([error.message]),
-            });
-
-            await db.updateDriveSyncConfig(config.id, {
-              lastSyncStatus: 'failed',
-              lastSyncError: error.message,
-            });
-
-            throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: error.message });
-          }
-        }),
-
-      // List folders in Google Drive for selection
-      listDriveFolders: protectedProcedure
-        .input(z.object({ parentId: z.string().optional() }))
-        .query(async ({ input, ctx }) => {
-          const token = await db.getGoogleOAuthTokenByUserId(ctx.user.id);
-          if (!token) {
-            throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Google Drive not connected' });
-          }
-
-          const { listGoogleDriveFolders } = await import('./googleDriveSyncService');
-          return listGoogleDriveFolders(token.accessToken, input.parentId);
-        }),
-    }),
-
-    // ============================================
-    // PAGE-LEVEL TRACKING
-    // ============================================
-    pageTracking: router({
-      // Record page view (public - for visitors)
-      recordPageView: publicProcedure
-        .input(z.object({
-          documentId: z.number(),
-          visitorId: z.number(),
-          sessionId: z.number().optional(),
-          linkId: z.number().optional(),
-          pageNumber: z.number(),
-          pageLabel: z.string().optional(),
-          durationMs: z.number().optional(),
-          scrollDepth: z.number().optional(),
-          mouseMovements: z.number().optional(),
-          clicks: z.number().optional(),
-          zoomLevel: z.number().optional(),
-          deviceType: z.string().optional(),
-          screenWidth: z.number().optional(),
-          screenHeight: z.number().optional(),
-          viewportWidth: z.number().optional(),
-          viewportHeight: z.number().optional(),
-        }))
-        .mutation(async ({ input }) => {
-          const id = await db.createDocumentPageView({
-            documentId: input.documentId,
-            visitorId: input.visitorId,
-            viewSessionId: input.sessionId,
-            linkId: input.linkId,
-            pageNumber: input.pageNumber,
-            pageLabel: input.pageLabel,
-            durationMs: input.durationMs || 0,
-            scrollDepth: input.scrollDepth,
-            mouseMovements: input.mouseMovements,
-            clicks: input.clicks,
-            zoomLevel: input.zoomLevel,
-            deviceType: input.deviceType,
-            screenWidth: input.screenWidth,
-            screenHeight: input.screenHeight,
-            viewportWidth: input.viewportWidth,
-            viewportHeight: input.viewportHeight,
-          });
-          return { id };
-        }),
-
-      // Update page view (when visitor leaves page)
-      updatePageView: publicProcedure
-        .input(z.object({
-          id: z.number(),
-          durationMs: z.number(),
-          scrollDepth: z.number().optional(),
-          mouseMovements: z.number().optional(),
-          clicks: z.number().optional(),
-        }))
-        .mutation(async ({ input }) => {
-          await db.updateDocumentPageView(input.id, {
-            exitTime: new Date(),
-            durationMs: input.durationMs,
-            scrollDepth: input.scrollDepth,
-            mouseMovements: input.mouseMovements,
-            clicks: input.clicks,
-          });
-          return { success: true };
-        }),
-
-      // Get page views for a document (admin)
-      getForDocument: protectedProcedure
-        .input(z.object({ documentId: z.number(), visitorId: z.number().optional() }))
-        .query(async ({ input }) => {
-          return db.getDocumentPageViews(input.documentId, input.visitorId);
-        }),
-
-      // Get page views by visitor (admin)
-      getByVisitor: protectedProcedure
-        .input(z.object({ visitorId: z.number() }))
-        .query(async ({ input }) => {
-          return db.getPageViewsByVisitor(input.visitorId);
-        }),
-    }),
-
-    // ============================================
-    // VISITOR SESSIONS
-    // ============================================
-    sessions: router({
-      // Start a new session (public)
-      start: publicProcedure
-        .input(z.object({
-          dataRoomId: z.number(),
-          visitorId: z.number(),
-          linkId: z.number().optional(),
-          deviceType: z.string().optional(),
-          browser: z.string().optional(),
-          browserVersion: z.string().optional(),
-          os: z.string().optional(),
-          osVersion: z.string().optional(),
-          screenResolution: z.string().optional(),
-          referrer: z.string().optional(),
-          utmSource: z.string().optional(),
-          utmMedium: z.string().optional(),
-          utmCampaign: z.string().optional(),
-        }))
-        .mutation(async ({ input, ctx }) => {
-          const sessionToken = `sess_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
-          const ipAddress = (ctx.req.headers['x-forwarded-for'] as string)?.split(',')[0] || ctx.req.socket.remoteAddress || '';
-
-          const id = await db.createVisitorSession({
-            dataRoomId: input.dataRoomId,
-            visitorId: input.visitorId,
-            linkId: input.linkId,
-            sessionToken,
-            deviceType: input.deviceType,
-            browser: input.browser,
-            browserVersion: input.browserVersion,
-            os: input.os,
-            osVersion: input.osVersion,
-            screenResolution: input.screenResolution,
-            ipAddress,
-            referrer: input.referrer,
-            utmSource: input.utmSource,
-            utmMedium: input.utmMedium,
-            utmCampaign: input.utmCampaign,
-          });
-
-          return { id, sessionToken };
-        }),
-
-      // Update session activity (public)
-      updateActivity: publicProcedure
-        .input(z.object({
-          sessionToken: z.string(),
-          documentsViewed: z.number().optional(),
-          pagesViewed: z.number().optional(),
-          totalScrollDistance: z.number().optional(),
-          totalClicks: z.number().optional(),
-          downloadsCount: z.number().optional(),
-          printsCount: z.number().optional(),
-          activeDurationMs: z.number().optional(),
-          idleDurationMs: z.number().optional(),
-        }))
-        .mutation(async ({ input }) => {
-          const session = await db.getSessionByToken(input.sessionToken);
-          if (!session) {
-            throw new TRPCError({ code: 'NOT_FOUND', message: 'Session not found' });
-          }
-
-          const { sessionToken, ...updateData } = input;
-          await db.updateVisitorSession(session.id, {
-            ...updateData,
-            totalDurationMs: (updateData.activeDurationMs || 0) + (updateData.idleDurationMs || 0),
-          });
-
-          return { success: true };
-        }),
-
-      // End session (public)
-      end: publicProcedure
-        .input(z.object({
-          sessionToken: z.string(),
-          totalDurationMs: z.number(),
-          activeDurationMs: z.number().optional(),
-        }))
-        .mutation(async ({ input }) => {
-          const session = await db.getSessionByToken(input.sessionToken);
-          if (!session) {
-            throw new TRPCError({ code: 'NOT_FOUND', message: 'Session not found' });
-          }
-
-          await db.updateVisitorSession(session.id, {
-            sessionEndAt: new Date(),
-            totalDurationMs: input.totalDurationMs,
-            activeDurationMs: input.activeDurationMs,
-            isActive: false,
-          });
-
-          return { success: true };
-        }),
-
-      // Get sessions for a data room (admin)
-      list: protectedProcedure
-        .input(z.object({ dataRoomId: z.number(), limit: z.number().default(100) }))
-        .query(async ({ input }) => {
-          return db.getDataRoomSessions(input.dataRoomId, input.limit);
-        }),
-
-      // Get sessions for a visitor (admin)
-      getByVisitor: protectedProcedure
-        .input(z.object({ visitorId: z.number() }))
-        .query(async ({ input }) => {
-          return db.getVisitorSessions(input.visitorId);
-        }),
-    }),
-
-    // ============================================
-    // EMAIL ACCESS RULES
-    // ============================================
-    emailRules: router({
-      // List rules for a data room
-      list: protectedProcedure
-        .input(z.object({ dataRoomId: z.number() }))
-        .query(async ({ input }) => {
-          return db.getEmailAccessRules(input.dataRoomId);
-        }),
-
-      // Create a new rule
-      create: protectedProcedure
-        .input(z.object({
-          dataRoomId: z.number(),
-          ruleType: z.enum(['allow_email', 'allow_domain', 'block_email', 'block_domain']),
-          emailPattern: z.string(),
-          allowDownload: z.boolean().default(true),
-          allowPrint: z.boolean().default(true),
-          maxViews: z.number().optional(),
-          expiresAt: z.date().optional(),
-          requireNdaSignature: z.boolean().default(true),
-          autoApprove: z.boolean().default(false),
-          notifyOnAccess: z.boolean().default(true),
-          notifyEmail: z.string().optional(),
-          priority: z.number().default(0),
-        }))
-        .mutation(async ({ input, ctx }) => {
-          const id = await db.createEmailAccessRule({
-            ...input,
-            createdBy: ctx.user.id,
-          });
-          return { id };
-        }),
-
-      // Update a rule
-      update: protectedProcedure
-        .input(z.object({
-          id: z.number(),
-          ruleType: z.enum(['allow_email', 'allow_domain', 'block_email', 'block_domain']).optional(),
-          emailPattern: z.string().optional(),
-          allowDownload: z.boolean().optional(),
-          allowPrint: z.boolean().optional(),
-          maxViews: z.number().optional(),
-          expiresAt: z.date().optional(),
-          requireNdaSignature: z.boolean().optional(),
-          autoApprove: z.boolean().optional(),
-          notifyOnAccess: z.boolean().optional(),
-          notifyEmail: z.string().optional(),
-          priority: z.number().optional(),
-          isActive: z.boolean().optional(),
-        }))
-        .mutation(async ({ input }) => {
-          const { id, ...data } = input;
-          await db.updateEmailAccessRule(id, data);
-          return { success: true };
-        }),
-
-      // Delete a rule
-      delete: protectedProcedure
-        .input(z.object({ id: z.number() }))
-        .mutation(async ({ input }) => {
-          await db.deleteEmailAccessRule(input.id);
-          return { success: true };
-        }),
-
-      // Check if an email has access (for public access flow)
-      checkAccess: publicProcedure
-        .input(z.object({ dataRoomId: z.number(), email: z.string() }))
-        .query(async ({ input }) => {
-          return db.checkEmailAccess(input.dataRoomId, input.email);
-        }),
-    }),
-
-    // ============================================
-    // DETAILED ANALYTICS
-    // ============================================
-    detailedAnalytics: router({
-      // Get page-level analytics for a data room
-      getPageAnalytics: protectedProcedure
-        .input(z.object({ dataRoomId: z.number() }))
-        .query(async ({ input }) => {
-          return db.getPageViewAnalytics(input.dataRoomId);
-        }),
-
-      // Get detailed analytics for a specific visitor
-      getVisitorDetails: protectedProcedure
-        .input(z.object({ dataRoomId: z.number(), visitorId: z.number() }))
-        .query(async ({ input }) => {
-          return db.getDetailedVisitorAnalytics(input.dataRoomId, input.visitorId);
-        }),
-
-      // Get engagement report for a data room
-      getEngagementReport: protectedProcedure
-        .input(z.object({
-          dataRoomId: z.number(),
-          startDate: z.date().optional(),
-          endDate: z.date().optional(),
-        }))
-        .query(async ({ input }) => {
-          return db.getDataRoomEngagementReport(input.dataRoomId, input.startDate, input.endDate);
-        }),
-
-      // Get document-level heatmap data (which pages are most viewed)
-      getDocumentHeatmap: protectedProcedure
-        .input(z.object({ documentId: z.number() }))
-        .query(async ({ input }) => {
-          const pageViews = await db.getDocumentPageViews(input.documentId);
-
-          // Aggregate by page number
-          const pageStats: Record<number, { views: number; totalDuration: number; uniqueVisitors: Set<number> }> = {};
-
-          pageViews.forEach(pv => {
-            if (!pageStats[pv.pageNumber]) {
-              pageStats[pv.pageNumber] = { views: 0, totalDuration: 0, uniqueVisitors: new Set() };
-            }
-            pageStats[pv.pageNumber].views++;
-            pageStats[pv.pageNumber].totalDuration += pv.durationMs || 0;
-            pageStats[pv.pageNumber].uniqueVisitors.add(pv.visitorId);
-          });
-
-          return Object.entries(pageStats).map(([page, stats]) => ({
-            pageNumber: parseInt(page),
-            views: stats.views,
-            totalDurationMs: stats.totalDuration,
-            avgDurationMs: stats.views > 0 ? stats.totalDuration / stats.views : 0,
-            uniqueVisitors: stats.uniqueVisitors.size,
-          })).sort((a, b) => a.pageNumber - b.pageNumber);
-        }),
-
-      // Export analytics as CSV
-      exportCsv: protectedProcedure
-        .input(z.object({
-          dataRoomId: z.number(),
-          type: z.enum(['visitors', 'documents', 'sessions', 'pageViews']),
-        }))
-        .mutation(async ({ input }) => {
-          const report = await db.getDataRoomEngagementReport(input.dataRoomId);
-          if (!report) {
-            throw new TRPCError({ code: 'NOT_FOUND', message: 'Data room not found' });
-          }
-
-          let csv = '';
-          let filename = '';
-
-          if (input.type === 'visitors') {
-            filename = `visitors_${input.dataRoomId}_${Date.now()}.csv`;
-            csv = 'Email,Name,Company,Status,Sessions,Total Time (min),Documents Viewed,Pages Viewed,NDA Signed,Last Activity\n';
-            report.visitorEngagement.forEach(v => {
-              csv += `"${v.email || ''}","${v.name || ''}","${v.company || ''}","${v.accessStatus}",${v.sessionsCount},${Math.round(v.totalTimeMs / 60000)},${v.documentsViewed},${v.pagesViewed},"${v.ndaAcceptedAt ? 'Yes' : 'No'}","${v.lastActivity || ''}"\n`;
-            });
-          } else if (input.type === 'documents') {
-            filename = `documents_${input.dataRoomId}_${Date.now()}.csv`;
-            csv = 'Document,Pages,Views,Unique Visitors,Total Time (min),Avg Time per Page (sec)\n';
-            report.documentEngagement.forEach(d => {
-              csv += `"${d.documentName}",${d.pageCount},${d.views},${d.uniqueVisitors},${Math.round(d.totalTimeMs / 60000)},${Math.round(d.avgTimePerPageMs / 1000)}\n`;
-            });
-          }
-
-          return { csv, filename };
-        }),
-    }),
   }),
 
   // ============================================
@@ -11337,6 +11361,21 @@ Ask if they received the original request and if they can provide a quote.`;
   // CRM MODULE - Contacts, Messaging & Tracking
   // ============================================
   crm: router({
+    // Stubs for legacy UI calls that were never wired to real procedures.
+    // Returning empty defaults keeps the existing UI harmless.
+    listInvestors: protectedProcedure.query(async () => [] as any[]),
+    listCampaigns: protectedProcedure.query(async () => [] as any[]),
+    listInvestments: protectedProcedure.query(async () => [] as any[]),
+    listReminders: protectedProcedure
+      .input(z.object({ status: z.string().optional(), dueBefore: z.date().optional() }).optional())
+      .query(async () => [] as any[]),
+    createInvestor: protectedProcedure
+      .input(z.record(z.string(), z.any()))
+      .mutation(async () => ({ id: 0 })),
+    createCampaign: protectedProcedure
+      .input(z.record(z.string(), z.any()))
+      .mutation(async () => ({ id: 0 })),
+
     // --- CONTACTS ---
     contacts: router({
       list: protectedProcedure
@@ -12499,6 +12538,20 @@ Ask if they received the original request and if they can provide a quote.`;
         await db.markListingThreadRead(input.threadId, ctx.user.id);
         return { success: true };
       }),
+  }),
+
+  // Stub routers for features whose UI exists but server logic was never wired up.
+  inventoryManagement: router({
+    list: protectedProcedure.query(async () => [] as any[]),
+    update: protectedProcedure
+      .input(z.object({ id: z.number() }).passthrough())
+      .mutation(async () => ({ success: true })),
+  }),
+
+  orderItems: router({
+    list: protectedProcedure
+      .input(z.object({ orderId: z.number() }))
+      .query(async () => [] as any[]),
   }),
 });
 

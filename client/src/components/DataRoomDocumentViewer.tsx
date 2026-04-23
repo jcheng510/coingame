@@ -300,7 +300,7 @@ export default function DataRoomDocumentViewer({
         <Document
           file={documentUrl}
           onLoadSuccess={onDocumentLoadSuccess}
-          onLoadError={(error) => {
+          onLoadError={(error: unknown) => {
             console.error('Error loading PDF:', error);
             setIsLoading(false);
           }}

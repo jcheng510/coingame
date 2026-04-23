@@ -131,15 +131,15 @@ export default function ProductDetail() {
             </div>
             <div>
               <Label className="text-muted-foreground">Cost</Label>
-              <p className="font-mono">{formatCurrency(product.cost)}</p>
+              <p className="font-mono">{formatCurrency(product.costPrice ?? "0")}</p>
             </div>
             <div>
               <Label className="text-muted-foreground">Total Inventory</Label>
-              <p className="text-xl font-semibold">{totalInventory} {product.unit || 'units'}</p>
+              <p className="text-xl font-semibold">{totalInventory} units</p>
             </div>
             <div>
-              <Label className="text-muted-foreground">Unit</Label>
-              <p>{product.unit || "-"}</p>
+              <Label className="text-muted-foreground">Type</Label>
+              <p>{product.type || "-"}</p>
             </div>
           </CardContent>
         </Card>
@@ -172,10 +172,10 @@ export default function ProductDetail() {
                 <div key={inv.id} className="flex justify-between items-center p-3 border rounded-lg">
                   <div>
                     <p className="font-medium">Warehouse #{inv.warehouseId}</p>
-                    <p className="text-sm text-muted-foreground">Location: {inv.location || "-"}</p>
+                    <p className="text-sm text-muted-foreground">Inventory #{inv.id}</p>
                   </div>
                   <div className="text-right">
-                    <p className="font-mono font-bold">{inv.quantity} {product.unit || 'units'}</p>
+                    <p className="font-mono font-bold">{inv.quantity} units</p>
                     {inv.reservedQuantity && parseFloat(inv.reservedQuantity.toString()) > 0 && (
                       <p className="text-sm text-muted-foreground">
                         Reserved: {inv.reservedQuantity}

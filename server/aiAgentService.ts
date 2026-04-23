@@ -455,7 +455,8 @@ async function executeAnalyzeData(params: any, ctx: AIAgentContext): Promise<any
       const allInventory = await db.select().from(inventory);
       const lowStockItems = allInventory.filter(i => parseFloat(i.quantity?.toString() || "0") < 10);
       const totalValue = allInventory.reduce((sum, i) => {
-        return sum + (parseFloat(i.quantity?.toString() || "0") * parseFloat(i.unitCost?.toString() || "0"));
+        const unitCost = (i as any).unitCost;
+        return sum + (parseFloat(i.quantity?.toString() || "0") * parseFloat(unitCost?.toString() || "0"));
       }, 0);
 
       return {
@@ -504,9 +505,9 @@ async function executeAnalyzeData(params: any, ctx: AIAgentContext): Promise<any
         timeRange !== "all" ? gte(invoices.createdAt, startDate) : undefined
       );
       const paidInvoices = allInvoices.filter(i => i.status === "paid");
-      const pendingInvoices = allInvoices.filter(i => i.status === "pending" || i.status === "sent");
+      const pendingInvoices = allInvoices.filter(i => (i.status as string) === "pending" || i.status === "sent");
       const overdueInvoices = allInvoices.filter(i =>
-        (i.status === "pending" || i.status === "sent") &&
+        ((i.status as string) === "pending" || i.status === "sent") &&
         i.dueDate && new Date(i.dueDate) < now
       );
 
@@ -530,7 +531,7 @@ async function executeAnalyzeData(params: any, ctx: AIAgentContext): Promise<any
         timeRange !== "all" ? gte(orders.createdAt, startDate) : undefined
       );
       const pendingOrders = allOrders.filter(o => o.status === "pending");
-      const completedOrders = allOrders.filter(o => o.status === "completed" || o.status === "delivered");
+      const completedOrders = allOrders.filter(o => (o.status as string) === "completed" || o.status === "delivered");
 
       return {
         summary: "Order analysis",
@@ -545,7 +546,7 @@ async function executeAnalyzeData(params: any, ctx: AIAgentContext): Promise<any
       const allPOs = await db.select().from(purchaseOrders).where(
         timeRange !== "all" ? gte(purchaseOrders.createdAt, startDate) : undefined
       );
-      const pendingPOs = allPOs.filter(po => po.status === "pending" || po.status === "sent");
+      const pendingPOs = allPOs.filter(po => (po.status as string) === "pending" || po.status === "sent");
       const totalSpent = allPOs.reduce((sum, po) => sum + parseFloat(po.totalAmount || "0"), 0);
 
       return {
@@ -600,7 +601,7 @@ async function executeSendEmail(params: any, ctx: AIAgentContext): Promise<any> 
         const customer = await db.select().from(customers).where(eq(customers.id, params.entityId)).limit(1);
         if (customer[0]?.email) {
           toEmail = customer[0].email;
-          recipientName = customer[0].contactName || customer[0].name || "Customer";
+          recipientName = customer[0].name || "Customer";
         }
         break;
       }
@@ -623,8 +624,10 @@ async function executeSendEmail(params: any, ctx: AIAgentContext): Promise<any> 
     await db.insert(sentEmails).values({
       toEmail,
       toName: recipientName,
+      fromEmail: process.env.FROM_EMAIL || "noreply@example.com",
       subject: params.subject,
-      body: params.body,
+      bodyText: params.body,
+      bodyHtml: formatEmailHtml(params.body),
       status: "sent",
       sentAt: new Date(),
       sentBy: ctx.userId,
@@ -800,7 +803,7 @@ async function executeManageVendor(params: any, ctx: AIAgentContext): Promise<an
         email: data.email,
         phone: data.phone,
         contactName: data.contactName,
-        category: data.category || "supplier",
+        type: (data.type as any) || "supplier",
         status: data.status || "active",
       }).$returningId();
       return { created: true, vendorId: newVendor[0].id };
@@ -897,7 +900,7 @@ async function executeManageCopacker(params: any, ctx: AIAgentContext): Promise<
     case "list": {
       // Copackers are vendors with category = 'copacker' or 'manufacturer'
       const allVendors = await db.select().from(vendors);
-      const copackers = allVendors.filter(v =>
+      const copackers = allVendors.filter((v: any) =>
         v.category === "copacker" ||
         v.category === "manufacturer" ||
         v.category === "contract_manufacturer"
@@ -949,13 +952,13 @@ async function executeManageCopacker(params: any, ctx: AIAgentContext): Promise<
 
     case "performance": {
       const allVendors = await db.select().from(vendors);
-      const copackers = allVendors.filter(v =>
+      const copackers = allVendors.filter((v: any) =>
         v.category === "copacker" ||
         v.category === "manufacturer"
       );
 
       return {
-        copackers: copackers.map(c => ({
+        copackers: copackers.map((c: any) => ({
           id: c.id,
           name: c.name,
           status: c.status,
@@ -1145,7 +1148,7 @@ async function executeGenerateReport(params: any, ctx: AIAgentContext): Promise<
     case "financial_overview": {
       const allInvoices = await db.select().from(invoices);
       const paidInvoices = allInvoices.filter(i => i.status === "paid");
-      const pendingInvoices = allInvoices.filter(i => i.status === "pending" || i.status === "sent");
+      const pendingInvoices = allInvoices.filter(i => (i.status as string) === "pending" || i.status === "sent");
 
       return {
         reportType: "financial_overview",
@@ -1479,7 +1482,7 @@ export async function getSystemOverview(ctx: AIAgentContext): Promise<any> {
   const activeCustomers = customerStats.filter(c => c.status === "active").length;
   const pendingOrders = orderStats.filter(o => o.status === "pending").length;
   const lowStockItems = inventoryStats.filter(i => parseFloat(i.quantity?.toString() || "0") < 10).length;
-  const pendingPOs = poStats.filter(po => po.status === "pending" || po.status === "sent").length;
+  const pendingPOs = poStats.filter(po => (po.status as string) === "pending" || po.status === "sent").length;
   const inProgressWOs = workOrderStats.filter(wo => wo.status === "in_progress").length;
 
   return {

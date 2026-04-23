@@ -27,8 +27,22 @@ import {
   ArrowUpDown,
   MapPin,
   Target,
+  Plus,
 } from "lucide-react";
-import { useToast } from "@/hooks/use-toast";
+import { Badge } from "@/components/ui/badge";
+import { toast } from "sonner";
+
+// Local shim for the legacy useToast API that was previously imported
+// from "@/hooks/use-toast" (which doesn't exist). Maps onto sonner.
+function useToast() {
+  return {
+    toast: (opts: { title?: string; description?: string; variant?: string }) => {
+      const msg = opts.description ?? opts.title ?? "";
+      if (opts.variant === "destructive") toast.error(msg);
+      else toast.success(msg);
+    },
+  };
+}
 
 type InventoryItem = {
   id: number;
@@ -355,7 +369,7 @@ export default function Inventory() {
               Track stock levels and manage inventory across locations.
             </p>
           </div>
-          <Button onClick={() => setCreateDialogOpen(true)}>
+          <Button disabled>
             <Plus className="h-4 w-4 mr-2" />
             Add Inventory
           </Button>

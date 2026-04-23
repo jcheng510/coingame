@@ -270,7 +270,8 @@ async function startServer() {
       }
 
       // Verify company ID matches (if user has one)
-      if (user.companyId && stateCompanyId !== user.companyId) {
+      const userCompanyId = (user as any).companyId as number | undefined;
+      if (userCompanyId && stateCompanyId !== userCompanyId) {
         return res.redirect('/settings/integrations?shopify_error=company_mismatch');
       }
 
@@ -329,7 +330,7 @@ async function startServer() {
       const { upsertShopifyStore, createSyncLog } = await import('../db');
       
       // Use the company ID from the authenticated user
-      const companyId = user.companyId || undefined;
+      const companyId = (user as any).companyId || undefined;
 
       // Import encryption function
       const { encrypt } = await import('../_core/crypto');
