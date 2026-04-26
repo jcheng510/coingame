@@ -15,6 +15,9 @@ build/
 .env.test.local
 .env.production.local
 
+# Manus tooling artifacts (DB query dumps may contain DB host/user/DB name)
+.manus/
+
 # IDE and editor files
 .vscode/
 .idea/
